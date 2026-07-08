@@ -131,7 +131,7 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
       </select></div>
     <div class="ctl"><label for="base">Baseline</label>
       <select id="base">
-        <option value="band">Control words (5–95% band)</option>
+        <option value="band">Control words (±1 std, per condition)</option>
         <option value="nomen">No-mention condition</option>
         <option value="none">None</option>
       </select></div>
@@ -204,39 +204,39 @@ function activeLayer() {
 }
 
 function seriesData() {
-  // returns {conds: [{id,label,color,vals|null,excluded,completion}], band: {lo,hi}|null}
+  // returns {conds: [{id,label,color,vals|null,band|null,excluded,completion}]}
+  // Each condition carries its own control-word null band (mean ± std across
+  // control words, from that condition's activations), paper-style: one band
+  // per condition line. Bands are only populated when the baseline mode is on.
   const slot = currentSlot();
   const L = activeLayer();
+  const showBands = state.base === "band" && !isSAE();
   const conds = [];
   for (const c of COND) {
     const rec = slot.conditions[c.id];
     const isBaseCond = state.base === "nomen" && c.id === "no_mention";
-    if (!rec) { conds.push({ ...c, vals: null, excluded: false, missing: true, isBaseCond }); continue; }
-    let vals = null;
+    if (!rec) { conds.push({ ...c, vals: null, band: null, excluded: false, missing: true, isBaseCond }); continue; }
+    let vals = null, band = null;
     if (rec.exact) {
       if (isSAE()) {
         const li = DB.sae_layers.indexOf(L);
         vals = rec.sae ? rec.sae[li] : null;
       } else if (rec[state.meas]) {
         vals = rec[state.meas].target[L];
+        if (showBands && rec[state.meas].nullmean) {
+          const mean = rec[state.meas].nullmean[L], std = rec[state.meas].nullstd[L];
+          band = { lo: mean.map((m, i) => m - std[i]), hi: mean.map((m, i) => m + std[i]) };
+        }
       }
     }
-    conds.push({ ...c, vals, excluded: !rec.exact, completion: rec.completion, isBaseCond });
+    conds.push({ ...c, vals, band, excluded: !rec.exact, completion: rec.completion, isBaseCond });
   }
-  let band = null;
-  if (state.base === "band" && !isSAE()) {
-    const src = slot.conditions.think && slot.conditions.think.exact ? slot.conditions.think
-              : slot.conditions.no_mention;
-    if (src && src[state.meas]) {
-      band = { lo: src[state.meas].null05[L], hi: src[state.meas].null95[L] };
-    }
-  }
-  return { conds, band };
+  return { conds };
 }
 
 function render() {
   const slot = currentSlot();
-  const { conds, band } = seriesData();
+  const { conds } = seriesData();
   const tokens = slot.tokens;
 
   // chips for excluded runs
@@ -262,18 +262,19 @@ function render() {
     it.appendChild(document.createTextNode(c.isBaseCond ? `${c.label} (baseline)` : c.label));
     lg.appendChild(it);
   }
-  if (band) {
+  for (const c of conds) {
+    if (!c.band) continue;
     const it = document.createElement("span"); it.className = "it";
     const sw = document.createElement("span"); sw.className = "sw band";
-    sw.style.background = cssv("--null");
+    sw.style.background = cssv(c.cssVar);
     it.appendChild(sw);
-    it.appendChild(document.createTextNode("control words 5–95%"));
+    it.appendChild(document.createTextNode(`${c.label} baseline ±1 std`));
     lg.appendChild(it);
   }
 
-  drawChart(tokens, conds, band);
+  drawChart(tokens, conds);
   renderLatents(slot);
-  renderTable(tokens, conds, band);
+  renderTable(tokens, conds);
   $("meta").textContent =
     `Run ${DB.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
     (isSAE()
@@ -281,7 +282,7 @@ function render() {
       : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
 }
 
-function drawChart(tokens, conds, band) {
+function drawChart(tokens, conds) {
   const svg = $("chart");
   const W = 1020, H = 430, m = { t: 16, r: 120, b: 86, l: 58 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
@@ -291,7 +292,7 @@ function drawChart(tokens, conds, band) {
   let lo = 0, hi = 0;
   const consider = (v) => { if (v == null) return; lo = Math.min(lo, v); hi = Math.max(hi, v); };
   conds.forEach((c) => (c.vals || []).forEach(consider));
-  if (band) { band.lo.forEach(consider); band.hi.forEach(consider); }
+  conds.forEach((c) => { if (c.band) { c.band.lo.forEach(consider); c.band.hi.forEach(consider); } });
   if (hi === lo) hi = lo + 1;
   const pad = (hi - lo) * 0.08;
   lo -= pad; hi += pad;
@@ -323,12 +324,14 @@ function drawChart(tokens, conds, band) {
   yl.textContent = isSAE() ? "selected-latent activation (sum)" : "cosine with concept vector";
   svg.appendChild(yl);
 
-  // band
-  if (band) {
+  // per-condition null bands (mean ± std across control words); drawn behind
+  // the lines, translucent so overlapping bands blend.
+  for (const c of conds) {
+    if (!c.band) continue;
     let d = "";
-    for (let i = 0; i < n; i++) d += `${i ? "L" : "M"}${x(i)},${y(band.hi[i])}`;
-    for (let i = n - 1; i >= 0; i--) d += `L${x(i)},${y(band.lo[i])}`;
-    svg.appendChild(el("path", { d: d + "Z", fill: cssv("--null"), opacity: 0.4 }));
+    for (let i = 0; i < n; i++) d += `${i ? "L" : "M"}${x(i)},${y(c.band.hi[i])}`;
+    for (let i = n - 1; i >= 0; i--) d += `L${x(i)},${y(c.band.lo[i])}`;
+    svg.appendChild(el("path", { d: d + "Z", fill: cssv(c.cssVar), opacity: 0.18 }));
   }
 
   // token tick labels
@@ -382,8 +385,8 @@ function drawChart(tokens, conds, band) {
         if (!c.vals) continue;
         const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
         html += `<div class="row"><span style="color:${color}">${c.label}</span><b>${c.vals[i].toFixed(isSAE() ? 1 : 3)}</b></div>`;
+        if (c.band) html += `<div class="row"><span style="color:${color};opacity:.75">${c.label} ±1σ</span><b>${c.band.lo[i].toFixed(2)}…${c.band.hi[i].toFixed(2)}</b></div>`;
       }
-      if (band) html += `<div class="row"><span>control 5–95%</span><b>${band.lo[i].toFixed(2)}…${band.hi[i].toFixed(2)}</b></div>`;
       tip.innerHTML = html;
       tip.style.display = "block";
       const box = svg.getBoundingClientRect();
@@ -415,18 +418,22 @@ function renderLatents(slot) {
   box.hidden = !meta || !meta.latents.length;
 }
 
-function renderTable(tokens, conds, band) {
+function renderTable(tokens, conds) {
   const wrap = $("tablewrap");
   if (wrap.hidden) return;
   const rows = conds.filter((c) => c.vals);
   let h = "<table><thead><tr><th>token</th>";
-  for (const c of rows) h += `<th>${c.label}</th>`;
-  if (band) h += "<th>ctl q05</th><th>ctl q95</th>";
+  for (const c of rows) {
+    h += `<th>${c.label}</th>`;
+    if (c.band) h += `<th>${c.label} −σ</th><th>${c.label} +σ</th>`;
+  }
   h += "</tr></thead><tbody>";
   tokens.forEach((tok, i) => {
     h += `<tr><td>${tok.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</td>`;
-    for (const c of rows) h += `<td>${c.vals[i].toFixed(isSAE() ? 1 : 3)}</td>`;
-    if (band) h += `<td>${band.lo[i].toFixed(3)}</td><td>${band.hi[i].toFixed(3)}</td>`;
+    for (const c of rows) {
+      h += `<td>${c.vals[i].toFixed(isSAE() ? 1 : 3)}</td>`;
+      if (c.band) h += `<td>${c.band.lo[i].toFixed(3)}</td><td>${c.band.hi[i].toFixed(3)}</td>`;
+    }
     h += "</tr>";
   });
   wrap.innerHTML = h + "</tbody></table>";

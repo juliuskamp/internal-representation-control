@@ -2,7 +2,8 @@
 
 For every stored (word, sentence, condition) run of a pipeline run:
   - concept-vector cosines per layer x token for the target word (both variants)
-  - control-word null band (q05/q95 across the 100 control words) per layer x token
+  - control-word null band (mean ± std across the 100 control words) per layer x
+    token, computed per condition (paper-style: one band per condition line)
   - SAE selected-latent summed activation per layer x token
 All series are trimmed to the sentence's own tokens (the model sometimes emits a
 trailing whitespace token before <end_of_turn>; verified to be the only length
@@ -94,12 +95,13 @@ def main(cfg: Config) -> None:
                     tgt = b["words"].index(word)
                     ctrl = torch.tensor(
                         [j for j, w in enumerate(b["words"]) if w in ctrl_set])
-                    q = torch.quantile(
-                        cos[:, ctrl], torch.tensor([0.05, 0.95]).cuda(), dim=1)
+                    cc = cos[:, ctrl]  # (L, n_control, T)
+                    null_mean = cc.mean(dim=1)
+                    null_std = cc.std(dim=1)
                     cond_entry[v] = {
                         "target": rnd(cos[:, tgt].cpu()),
-                        "null05": rnd(q[0].cpu()),
-                        "null95": rnd(q[1].cpu()),
+                        "nullmean": rnd(null_mean.cpu()),
+                        "nullstd": rnd(null_std.cpu()),
                     }
                 lat_file = latents_dir / f"{word}.json"
                 if lat_file.exists():
@@ -140,7 +142,13 @@ def main(cfg: Config) -> None:
     template = Path("viz/repr_viewer.html").read_text()
     assert "__DATA_B64__" in template
     out = run_dir / "results" / "repr_viewer.html"
-    out.write_text(template.replace("__DATA_B64__", b64))
+    # The template is a headless body fragment (Artifact-friendly). For a
+    # standalone file opened over file://, the browser gets no charset hint and
+    # falls back to Windows-1252, mangling UTF-8 (± -> "Â±", — -> "â€""). Wrap
+    # it in a minimal document declaring UTF-8. doctype + meta come before any
+    # body content, so the template's <title>/<style> still parse into <head>.
+    doc = '<!doctype html>\n<meta charset="utf-8">\n' + template.replace("__DATA_B64__", b64)
+    out.write_text(doc, encoding="utf-8")
     print(f"json {len(raw) / 1e6:.1f} MB -> gzip {len(gz) / 1e6:.1f} MB; "
           f"viewer written to {out} ({out.stat().st_size / 1e6:.1f} MB)")
 
