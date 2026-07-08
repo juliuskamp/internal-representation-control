@@ -1,0 +1,51 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Replication of the "intentional control" experiment from the paper *Emergent Introspective Awareness in Large Language Models* (excerpts in `scratch/`), on `google/gemma-3-27b-it` with Gemma Scope 2 SAEs. The model is told to write a fixed sentence while thinking / not thinking about a concept word; we measure how strongly the concept is internally represented on the response tokens via (a) cosine with mean-difference concept vectors and (b) activation of concept-selective SAE latents. Findings and decisions are logged in `notes/` (`smoke_tests.md`, `run1_results.md`) — read these before changing measurement code.
+
+## Commands
+
+Everything runs through `uv` (no test suite or linter is configured):
+
+```bash
+# Full pipeline (stages are cached/resumable; safe to re-run)
+uv run python scripts/run_pipeline.py --run-id run1
+uv run python scripts/run_pipeline.py --run-id run1 --stages generate measure
+uv run python scripts/run_pipeline.py --run-id run1 --words Dust Oceans --sentences-per-word 5
+
+# Figures and interactive viewer for a finished run
+uv run python scripts/plot_results.py --run-id run1-core
+uv run python scripts/export_viz_data.py --run-id run1-core
+
+# Smoke tests (a: generation, b: SAE, c: concept vector, d: latent selection)
+uv run python scripts/smoke_a_generate.py
+```
+
+Requires a GPU with ~55 GB VRAM (bf16) and `.env` at the repo root with `HF_TOKEN` (see `.env.example`). The `measure` stage and `export_viz_data.py` don't need the LLM, only stored activations + SAEs.
+
+## Hard requirements
+
+- **`from irc import env` must be the first import in every entry point** — it loads `.env` and sets `HF_HOME=/workspace/hf-cache` before `huggingface_hub` reads it at import time.
+- **bf16 only, never quantized/fp32** — we measure activations; dtype changes them.
+- **Exclude token position 0 (BOS) from all activation measurements.** Its residual norm is ~20× other tokens and the SAEs were not trained on it (see `notes/smoke_tests.md`).
+- **SAE variant is pinned to `gemma-scope-2-27b-it-res` / `layer_{n}_width_16k_l0_medium`** — the only variant Neuronpedia indexed for this model (`{layer}-gemmascope-2-res-16k`); other L0 variants have non-matching latent indices, breaking label lookups.
+- **Word lists are versioned, never edited in place**: `irc/words_paper.py` is transcribed from the paper (do not edit; baseline deduplicated to 99 words per logged decision), `irc/words.py` sets are `_V1` — add a new version if a set must change.
+- Concept words are stored Capitalized but must always be lowercased when placed into prompts.
+
+## Architecture
+
+`irc/` package, orchestrated by `scripts/run_pipeline.py` in four cached stages (`irc/pipeline.py`):
+
+1. **vectors** — mean-difference concept vectors for 50 concept + 100 control words, two extraction variants: `"paper"` (last-prompt-token of "Tell me about {word}.") and `"word_tokens"` (mean over the word's own token positions across 4 templates, `irc/concept_vectors.py`). Cached in `artifacts/concept_vectors/bank_{variant}_v1.pt`. Note: the paper's extraction positions failed sanity checks on Gemma (they encode chat-template structure); `word_tokens` is the working method, and raw cosines are dominated by a shared generic direction — paired within-word comparisons (or centering) are the sensitive test.
+2. **generate** — per (word, sentence) × condition (prompts in `irc/conditions.py`; `no_mention` is our word-free baseline, shared across words per sentence): greedy generation, **exact-output compliance check** (non-exact completions are flagged and excluded from measurement), all-layer resid_post capture on response tokens via `ResidualCapture` hooks (`irc/model.py`). Written to `artifacts/runs/{run_id}/` as `generations.jsonl` + `acts/*.pt` (bf16, layers × tokens × d_model).
+3. **latents** — per concept word and SAE layer (16/31/40/53): select top-k latents with high mean activation on the word's tokens in templates and near-zero max activation on the 50 experiment sentences (`baseline_max < 0.1 × concept_mean`), cross-checked with Neuronpedia auto-interp labels (cached in `artifacts/neuronpedia_cache.json`). Output: `artifacts/latents_v1/{word}.json`. Word-independent of run_id.
+4. **measure** — model-free; reads stored acts. Concept-vector cosines per layer×token (target word + 100-control-word null) → `results/concept_cosines.parquet`, `token_cosines/`, `null_means/`; selected-latent SAE stats → `results/sae_latents.parquet`.
+
+Run provenance (config, versions, git commit) is written to `artifacts/runs/{run_id}/config.json`.
+
+**Viewer**: `viz/repr_viewer.html` is a template with a `__DATA_B64__` slot; `scripts/export_viz_data.py` bakes gzipped per-token data into it and writes a self-contained page to the run's `results/` dir. Edit the template, then re-export.
+
+`artifacts/`, `scratch/`, and `.env` are gitignored — artifacts are the (large) data store, not code.
