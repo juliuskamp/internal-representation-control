@@ -49,6 +49,7 @@ header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
   margin-bottom: 8px;
 }
 .ctl { display: flex; flex-direction: column; gap: 4px; }
+.ctl[hidden] { display: none; }
 .ctl label {
   font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
   color: var(--ink-2);
@@ -93,6 +94,10 @@ svg .zero { stroke: var(--ink-2); stroke-width: 1; }
 .latents h2, .tablebox h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 8px; font-weight: 600; }
 .latents ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .latents li { font-size: 13px; color: var(--ink-2); }
+.latents li label { display: inline-flex; align-items: baseline; gap: 8px; cursor: pointer; }
+.latents li input[type=checkbox] { accent-color: var(--accent); margin: 0; align-self: center; }
+.latents li.off { opacity: .5; }
+.latents li.off code { text-decoration: line-through; }
 .latents li code {
   font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ink);
   background: var(--surface-2); border-radius: 5px; padding: 1px 6px; margin-right: 6px;
@@ -127,7 +132,13 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
       <select id="meas">
         <option value="word_tokens">Concept vector — word tokens</option>
         <option value="paper">Concept vector — paper method</option>
-        <option value="sae">SAE latents (top-5 sum)</option>
+        <option value="sae">SAE latents (top-5)</option>
+      </select></div>
+    <div class="ctl" id="aggctl" hidden><label for="agg">Latent aggregation</label>
+      <select id="agg">
+        <option value="sum">Sum</option>
+        <option value="mean">Average</option>
+        <option value="max">Max</option>
       </select></div>
     <div class="ctl"><label for="base">Baseline</label>
       <select id="base">
@@ -173,7 +184,28 @@ const $ = (id) => document.getElementById(id);
 const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
 let DB = null;
-const state = { word: null, si: null, meas: "word_tokens", base: "band", layer: 40, saeLayer: 40 };
+const state = { word: null, si: null, meas: "word_tokens", base: "band", layer: 40, saeLayer: 40,
+  saeAgg: "sum", latentOff: new Set() };  // latentOff keys: "word|layer|latent"
+
+const latentKey = (layer, latent) => `${state.word}|${layer}|${latent}`;
+
+function saeLatentMeta(slot, L) {
+  const meta = (slot.sae_latents || []).find((m) => m.layer === L);
+  return meta ? meta.latents : [];
+}
+
+// rows: (n_latents, T) per-latent activations; aggregate the enabled ones.
+function aggregateSAE(rows, latents) {
+  const act = rows.filter((_, k) =>
+    !latents[k] || !state.latentOff.has(latentKey(activeLayer(), latents[k].latent)));
+  if (!act.length) return null;
+  return rows[0].map((_, i) => {
+    const xs = act.map((r) => r[i]);
+    if (state.saeAgg === "max") return Math.max(...xs);
+    const s = xs.reduce((a, b) => a + b, 0);
+    return state.saeAgg === "mean" ? s / xs.length : s;
+  });
+}
 
 async function decodePayload() {
   const b64 = $("payload").textContent.trim();
@@ -220,7 +252,8 @@ function seriesData() {
     if (rec.exact) {
       if (isSAE()) {
         const li = DB.sae_layers.indexOf(L);
-        vals = rec.sae ? rec.sae[li] : null;
+        const rows = rec.sae ? rec.sae[li] : null;
+        vals = rows ? aggregateSAE(rows, saeLatentMeta(slot, L)) : null;
       } else if (rec[state.meas]) {
         vals = rec[state.meas].target[L];
         if (showBands && rec[state.meas].nullmean) {
@@ -278,7 +311,7 @@ function render() {
   $("meta").textContent =
     `Run ${DB.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
     (isSAE()
-      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, sum over selected latents`
+      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents`
       : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
 }
 
@@ -321,7 +354,9 @@ function drawChart(tokens, conds) {
   // y axis label
   const yl = el("text", { x: 14, y: m.t + ih / 2, "font-size": 11.5,
     transform: `rotate(-90 14 ${m.t + ih / 2})`, "text-anchor": "middle" });
-  yl.textContent = isSAE() ? "selected-latent activation (sum)" : "cosine with concept vector";
+  yl.textContent = isSAE()
+    ? `selected-latent activation (${state.saeAgg === "mean" ? "average" : state.saeAgg})`
+    : "cosine with concept vector";
   svg.appendChild(yl);
 
   // per-condition null bands (mean ± std across control words); drawn behind
@@ -405,17 +440,29 @@ function renderLatents(slot) {
   const box = $("latents");
   if (!isSAE() || !slot.sae_latents) { box.hidden = true; return; }
   const L = activeLayer();
-  const meta = slot.sae_latents.find((m) => m.layer === L);
+  const latents = saeLatentMeta(slot, L);
   const ul = $("latentlist"); ul.innerHTML = "";
-  for (const e of meta ? meta.latents : []) {
+  for (const e of latents) {
+    const key = latentKey(L, e.latent);
     const li = document.createElement("li");
+    li.className = state.latentOff.has(key) ? "off" : "";
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !state.latentOff.has(key);
+    cb.addEventListener("change", () => {
+      state.latentOff.has(key) ? state.latentOff.delete(key) : state.latentOff.add(key);
+      render();
+    });
+    label.appendChild(cb);
     const code = document.createElement("code");
     code.textContent = `#${e.latent}`;
-    li.appendChild(code);
-    li.appendChild(document.createTextNode(e.label || "(no label)"));
+    label.appendChild(code);
+    label.appendChild(document.createTextNode(e.label || "(no label)"));
+    li.appendChild(label);
     ul.appendChild(li);
   }
-  box.hidden = !meta || !meta.latents.length;
+  box.hidden = !latents.length;
 }
 
 function renderTable(tokens, conds) {
@@ -454,6 +501,7 @@ function syncControls() {
   const baseSel = $("base");
   baseSel.querySelector('option[value="band"]').disabled = isSAE();
   if (isSAE() && state.base === "band") { state.base = "nomen"; baseSel.value = "nomen"; }
+  $("aggctl").hidden = !isSAE();
 }
 
 function init(db) {
@@ -475,6 +523,7 @@ function init(db) {
   $("sent").addEventListener("change", (e) => { state.si = e.target.value; render(); });
   $("meas").addEventListener("change", (e) => { state.meas = e.target.value; syncControls(); render(); });
   $("base").addEventListener("change", (e) => { state.base = e.target.value; render(); });
+  $("agg").addEventListener("change", (e) => { state.saeAgg = e.target.value; render(); });
   $("layer").addEventListener("input", (e) => {
     if (isSAE()) state.saeLayer = DB.sae_layers[+e.target.value];
     else state.layer = +e.target.value;

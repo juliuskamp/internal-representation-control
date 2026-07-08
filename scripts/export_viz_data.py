@@ -4,7 +4,8 @@ For every stored (word, sentence, condition) run of a pipeline run:
   - concept-vector cosines per layer x token for the target word (both variants)
   - control-word null band (mean ± std across the 100 control words) per layer x
     token, computed per condition (paper-style: one band per condition line)
-  - SAE selected-latent summed activation per layer x token
+  - SAE activation per layer x selected latent x token (aggregation and latent
+    toggling happen client-side in the viewer)
 All series are trimmed to the sentence's own tokens (the model sometimes emits a
 trailing whitespace token before <end_of_turn>; verified to be the only length
 mismatch, and responses always begin directly with the sentence tokens).
@@ -119,7 +120,7 @@ def main(cfg: Config) -> None:
                         if idxs:
                             f = saes[layer].encode(A[layer].to(saes[layer].dtype))
                             sae_vals.append(
-                                [round(float(x), 2) for x in f[:, idxs].sum(1)])
+                                [[round(float(x), 2) for x in f[:, j]] for j in idxs])
                         else:
                             sae_vals.append(None)
                     cond_entry["sae"] = sae_vals
