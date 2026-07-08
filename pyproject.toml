@@ -1,0 +1,25 @@
+[project]
+name = "internal-representation-control"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.14.0",
+    "huggingface-hub>=1.22.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.11.0",
+    "numpy>=2.5.1",
+    "pandas>=3.0.3",
+    "python-dotenv>=1.2.2",
+    "sae-lens>=6.45.3",
+    "torch>=2.12.1",
+    "transformer-lens>=3.5.1",
+    "transformers>=5.13.0",
+    "tyro>=1.0.15",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["irc"]
