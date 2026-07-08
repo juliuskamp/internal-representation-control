@@ -1,9 +1,13 @@
-<!-- Template for the interactive per-token representation viewer.
-     scripts/export_viz_data.py replaces __DATA_B64__ with the run's data
-     (gzip+base64 JSON) and writes the self-contained page to
-     artifacts/runs/{run_id}/results/repr_viewer.html — open that file in a
-     browser. Kept as a body fragment (no <html>/<head>) so it can also be
-     published as a claude.ai Artifact unchanged. -->
+<!doctype html>
+<!-- Interactive per-token representation viewer, served from GitHub Pages
+     (or locally: python -m http.server -d docs). Data is fetched from
+     data/index.json, data/shared-bands.json.gz and data/words/{word}.json.gz,
+     all written by scripts/export_viz_data.py — fetch() means this page does
+     NOT work over file://. Append ?embed=1 for a chrome-less iframe view. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internal representation viewer — Gemma 3 27B</title>
 <style>
 :root {
@@ -38,6 +42,8 @@ body {
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
+.embed .wrap { padding: 12px 12px 24px; }
+.embed header { display: none; }
 header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
   font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
@@ -65,6 +71,8 @@ select:focus-visible, input:focus-visible, button:focus-visible {
 }
 .layerctl { min-width: 210px; }
 .layerctl .lv { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+.status { color: var(--ink-2); font-size: 12.5px; min-height: 1.2em; margin: 6px 2px 0; }
+.status.err { color: var(--chip-bad-ink); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
 .chip {
   background: var(--chip-bad-bg); color: var(--chip-bad-ink);
@@ -116,6 +124,8 @@ th, td {
 th:first-child, td:first-child { text-align: left; font-family: ui-monospace, Menlo, Consolas, monospace; }
 footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
 </style>
+</head>
+<body>
 <div class="wrap">
   <header>
     <h1>Internal representation strength across sentence tokens</h1>
@@ -149,6 +159,7 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <div class="ctl layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
       <input type="range" id="layer" min="0" max="61" step="1" value="40"></div>
   </div>
+  <div class="status" id="status" role="status"></div>
 
   <div class="chips" id="chips"></div>
   <div class="legend" id="legend"></div>
@@ -173,8 +184,11 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
   <footer id="meta"></footer>
 </div>
 
-<script id="payload" type="application/octet-stream">__DATA_B64__</script>
 <script>
+if (new URLSearchParams(location.search).has("embed")) {
+  document.documentElement.classList.add("embed");
+}
+
 const COND = [
   { id: "think", label: "think", cssVar: "--think" },
   { id: "dont_think", label: "don't think", cssVar: "--dont" },
@@ -183,9 +197,78 @@ const COND = [
 const $ = (id) => document.getElementById(id);
 const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
-let DB = null;
+let INDEX = null, SHARED = null;
+const CHUNKS = {};  // word -> {word, slots}
 const state = { word: null, si: null, meas: "word_tokens", base: "band", layer: 40, saeLayer: 40,
   saeAgg: "sum", latentOff: new Set() };  // latentOff keys: "word|layer|latent"
+
+function setStatus(msg, isErr = false) {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = "status" + (isErr ? " err" : "");
+}
+
+async function fetchJSON(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  return r.json();
+}
+
+async function fetchGzJSON(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  const ds = new DecompressionStream("gzip");
+  return new Response(r.body.pipeThrough(ds)).json();
+}
+
+// The no_mention null bands are word-independent and shipped once in
+// shared-bands.json.gz; splice them into each freshly loaded word chunk so the
+// rest of the code can treat every condition entry uniformly.
+function mergeShared(chunk) {
+  for (const [si, slot] of Object.entries(chunk.slots)) {
+    const nm = slot.conditions.no_mention, sh = SHARED[si];
+    if (!nm || !sh) continue;
+    for (const v of INDEX.variants) {
+      if (nm[v] && sh[v]) Object.assign(nm[v], sh[v]);
+    }
+  }
+}
+
+async function ensureWord(word) {
+  if (!CHUNKS[word]) {
+    setStatus(`loading ${word}…`);
+    try {
+      const chunk = await fetchGzJSON(`data/words/${encodeURIComponent(word)}.json.gz`);
+      mergeShared(chunk);
+      CHUNKS[word] = chunk;
+      setStatus("");
+    } catch (e) {
+      setStatus(`failed to load ${word}: ${e.message}`, true);
+      throw e;
+    }
+  }
+  return CHUNKS[word];
+}
+
+function fillSelect(sel, opts, value) {
+  sel.innerHTML = "";
+  for (const o of opts) {
+    const el = document.createElement("option");
+    el.value = o.value; el.textContent = o.label;
+    sel.appendChild(el);
+  }
+  sel.value = value;
+}
+
+function currentSlot() { return CHUNKS[state.word].slots[state.si]; }
+
+function isSAE() { return state.meas === "sae"; }
+
+function activeLayer() {
+  if (!isSAE()) return state.layer;
+  const ls = INDEX.sae_layers;
+  return ls.reduce((a, b) => Math.abs(b - state.saeLayer) < Math.abs(a - state.saeLayer) ? b : a);
+}
 
 const latentKey = (layer, latent) => `${state.word}|${layer}|${latent}`;
 
@@ -207,34 +290,6 @@ function aggregateSAE(rows, latents) {
   });
 }
 
-async function decodePayload() {
-  const b64 = $("payload").textContent.trim();
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  const ds = new DecompressionStream("gzip");
-  const stream = new Blob([bytes]).stream().pipeThrough(ds);
-  return new Response(stream).json();
-}
-
-function fillSelect(sel, opts, value) {
-  sel.innerHTML = "";
-  for (const o of opts) {
-    const el = document.createElement("option");
-    el.value = o.value; el.textContent = o.label;
-    sel.appendChild(el);
-  }
-  sel.value = value;
-}
-
-function currentSlot() { return DB.data[state.word][state.si]; }
-
-function isSAE() { return state.meas === "sae"; }
-
-function activeLayer() {
-  if (!isSAE()) return state.layer;
-  const ls = DB.sae_layers;
-  return ls.reduce((a, b) => Math.abs(b - state.saeLayer) < Math.abs(a - state.saeLayer) ? b : a);
-}
-
 function seriesData() {
   // returns {conds: [{id,label,color,vals|null,band|null,excluded,completion}]}
   // Each condition carries its own control-word null band (mean ± std across
@@ -251,7 +306,7 @@ function seriesData() {
     let vals = null, band = null;
     if (rec.exact) {
       if (isSAE()) {
-        const li = DB.sae_layers.indexOf(L);
+        const li = INDEX.sae_layers.indexOf(L);
         const rows = rec.sae ? rec.sae[li] : null;
         vals = rows ? aggregateSAE(rows, saeLatentMeta(slot, L)) : null;
       } else if (rec[state.meas]) {
@@ -309,7 +364,7 @@ function render() {
   renderLatents(slot);
   renderTable(tokens, conds);
   $("meta").textContent =
-    `Run ${DB.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
+    `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
     (isSAE()
       ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents`
       : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
@@ -487,14 +542,13 @@ function renderTable(tokens, conds) {
 }
 
 function syncControls() {
-  const meas = state.meas;
   const layer = $("layer");
   if (isSAE()) {
-    layer.min = 0; layer.max = DB.sae_layers.length - 1; layer.step = 1;
-    layer.value = DB.sae_layers.indexOf(activeLayer());
+    layer.min = 0; layer.max = INDEX.sae_layers.length - 1; layer.step = 1;
+    layer.value = INDEX.sae_layers.indexOf(activeLayer());
     $("layerval").textContent = activeLayer() + " (SAE)";
   } else {
-    layer.min = 0; layer.max = DB.n_layers - 1; layer.step = 1;
+    layer.min = 0; layer.max = INDEX.n_layers - 1; layer.step = 1;
     layer.value = state.layer;
     $("layerval").textContent = state.layer;
   }
@@ -504,28 +558,34 @@ function syncControls() {
   $("aggctl").hidden = !isSAE();
 }
 
-function init(db) {
-  DB = db;
-  const words = Object.keys(db.data).sort();
+function syncSentences() {
+  const sis = Object.keys(CHUNKS[state.word].slots);
+  if (!sis.includes(state.si)) state.si = sis[0];
+  fillSelect($("sent"), sis.map((si) => ({
+    value: si, label: `s${si.padStart(2, "0")} — ${CHUNKS[state.word].slots[si].sentence}`,
+  })), state.si);
+}
+
+async function init() {
+  const words = INDEX.words;
   state.word = words[0];
   fillSelect($("word"), words.map((w) => ({ value: w, label: w })), state.word);
-
-  const syncSentences = () => {
-    const sis = Object.keys(db.data[state.word]);
-    if (!sis.includes(state.si)) state.si = sis[0];
-    fillSelect($("sent"), sis.map((si) => ({
-      value: si, label: `s${si.padStart(2, "0")} — ${db.data[state.word][si].sentence}`,
-    })), state.si);
-  };
+  await ensureWord(state.word);
   syncSentences();
 
-  $("word").addEventListener("change", (e) => { state.word = e.target.value; syncSentences(); render(); });
+  $("word").addEventListener("change", async (e) => {
+    const w = e.target.value;
+    state.word = w;
+    await ensureWord(w);
+    if (state.word !== w) return;  // user switched again while loading
+    syncSentences(); render();
+  });
   $("sent").addEventListener("change", (e) => { state.si = e.target.value; render(); });
   $("meas").addEventListener("change", (e) => { state.meas = e.target.value; syncControls(); render(); });
   $("base").addEventListener("change", (e) => { state.base = e.target.value; render(); });
   $("agg").addEventListener("change", (e) => { state.saeAgg = e.target.value; render(); });
   $("layer").addEventListener("input", (e) => {
-    if (isSAE()) state.saeLayer = DB.sae_layers[+e.target.value];
+    if (isSAE()) state.saeLayer = INDEX.sae_layers[+e.target.value];
     else state.layer = +e.target.value;
     syncControls(); render();
   });
@@ -543,8 +603,21 @@ function init(db) {
   render();
 }
 
-decodePayload().then(init).catch((e) => {
-  document.querySelector(".wrap").insertAdjacentHTML("beforeend",
-    `<p style="color:#c33">Failed to decode embedded data: ${e}</p>`);
-});
+(async () => {
+  try {
+    if (location.protocol === "file:") {
+      throw new Error("this page loads its data with fetch(), which browsers block on file:// — "
+        + "serve it instead: python -m http.server -d docs");
+    }
+    setStatus("loading…");
+    [INDEX, SHARED] = await Promise.all([
+      fetchJSON("data/index.json"), fetchGzJSON("data/shared-bands.json.gz")]);
+    await init();
+    setStatus("");
+  } catch (e) {
+    setStatus(String(e.message || e), true);
+  }
+})();
 </script>
+</body>
+</html>

@@ -18,7 +18,8 @@ uv run python scripts/run_pipeline.py --run-id run1 --words Dust Oceans --senten
 
 # Figures and interactive viewer for a finished run
 uv run python scripts/plot_results.py --run-id run1-core
-uv run python scripts/export_viz_data.py --run-id run1-core
+uv run python scripts/export_viz_data.py --run-id run1-core  # writes docs/data/
+python -m http.server -d docs                                # view at localhost:8000
 
 # Smoke tests (a: generation, b: SAE, c: concept vector, d: latent selection)
 uv run python scripts/smoke_a_generate.py
@@ -46,6 +47,6 @@ Requires a GPU with ~55 GB VRAM (bf16) and `.env` at the repo root with `HF_TOKE
 
 Run provenance (config, versions, git commit) is written to `artifacts/runs/{run_id}/config.json`.
 
-**Viewer**: `viz/repr_viewer.html` is a template with a `__DATA_B64__` slot; `scripts/export_viz_data.py` bakes gzipped per-token data into it and writes a self-contained page to the run's `results/` dir. Edit the template, then re-export.
+**Viewer**: `docs/` is a static site for GitHub Pages (also embeddable via iframe; `?embed=1` hides the page chrome). `docs/index.html` fetches chunked data from `docs/data/` — `index.json` (metadata + word list), `shared-bands.json.gz` (word-independent `no_mention` null bands, deduplicated), `words/{word}.json.gz` (per-word slots, lazy-loaded). `scripts/export_viz_data.py` writes these from a run's stored activations; the data files are committed derived data, so publishing a new run means re-export + commit. fetch() is blocked on `file://` — always view through an HTTP server.
 
-`artifacts/`, `scratch/`, and `.env` are gitignored — artifacts are the (large) data store, not code.
+`artifacts/`, `scratch/`, and `.env` are gitignored — artifacts are the (large) data store, not code. `docs/data/` is deliberately tracked (it is the published site).
