@@ -1,0 +1,494 @@
+<!-- Template for the interactive per-token representation viewer.
+     scripts/export_viz_data.py replaces __DATA_B64__ with the run's data
+     (gzip+base64 JSON) and writes the self-contained page to
+     artifacts/runs/{run_id}/results/repr_viewer.html — open that file in a
+     browser. Kept as a body fragment (no <html>/<head>) so it can also be
+     published as a claude.ai Artifact unchanged. -->
+<title>Internal representation viewer — Gemma 3 27B</title>
+<style>
+:root {
+  --surface: #fbfbf9; --surface-2: #f1f0ec; --ink: #171614; --ink-2: #55534d;
+  --line: #e2e1db; --accent: #2a78d6;
+  --think: #2a78d6; --dont: #eda100; --nomen: #1baf7a; --null: #b9b7b0;
+  --chip-bad-bg: #fbeaea; --chip-bad-ink: #9c2a29;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1a1a19; --surface-2: #242422; --ink: #f2f1ec; --ink-2: #c3c2b7;
+    --line: #35342f; --accent: #3987e5;
+    --think: #3987e5; --dont: #c98500; --nomen: #199e70; --null: #55534d;
+    --chip-bad-bg: #3a2323; --chip-bad-ink: #e8908f;
+  }
+}
+:root[data-theme="light"] {
+  --surface: #fbfbf9; --surface-2: #f1f0ec; --ink: #171614; --ink-2: #55534d;
+  --line: #e2e1db; --accent: #2a78d6;
+  --think: #2a78d6; --dont: #eda100; --nomen: #1baf7a; --null: #b9b7b0;
+  --chip-bad-bg: #fbeaea; --chip-bad-ink: #9c2a29;
+}
+:root[data-theme="dark"] {
+  --surface: #1a1a19; --surface-2: #242422; --ink: #f2f1ec; --ink-2: #c3c2b7;
+  --line: #35342f; --accent: #3987e5;
+  --think: #3987e5; --dont: #c98500; --nomen: #199e70; --null: #55534d;
+  --chip-bad-bg: #3a2323; --chip-bad-ink: #e8908f;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface); color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
+header h1 {
+  font-family: Charter, Georgia, "Times New Roman", serif;
+  font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
+}
+header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
+.controls {
+  display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
+  padding: 14px 16px; background: var(--surface-2); border-radius: 10px;
+  margin-bottom: 8px;
+}
+.ctl { display: flex; flex-direction: column; gap: 4px; }
+.ctl label {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-2);
+}
+select, input[type=range] { accent-color: var(--accent); }
+select {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+  max-width: 320px;
+}
+select:focus-visible, input:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.layerctl { min-width: 210px; }
+.layerctl .lv { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.chip {
+  background: var(--chip-bad-bg); color: var(--chip-bad-ink);
+  border-radius: 999px; padding: 3px 12px; font-size: 12.5px;
+}
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 2px 4px; font-size: 13px; color: var(--ink-2); }
+.legend .it { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+.sw.band { width: 18px; height: 12px; border-radius: 3px; opacity: .5; }
+.sw.dash { background: repeating-linear-gradient(90deg, var(--null) 0 4px, transparent 4px 8px) !important; height: 3px; }
+figure { margin: 0; }
+.chartbox { position: relative; }
+svg text { fill: var(--ink-2); font-family: system-ui, sans-serif; }
+svg .tok { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--ink); }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .zero { stroke: var(--ink-2); stroke-width: 1; }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+  font-size: 12.5px; box-shadow: 0 3px 14px rgba(0,0,0,.14); display: none;
+  min-width: 150px; z-index: 3;
+}
+.tooltip .tt { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; margin-bottom: 4px; }
+.tooltip .row { display: flex; justify-content: space-between; gap: 14px; }
+.tooltip .row b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.latents { margin-top: 18px; }
+.latents h2, .tablebox h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 8px; font-weight: 600; }
+.latents ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.latents li { font-size: 13px; color: var(--ink-2); }
+.latents li code {
+  font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ink);
+  background: var(--surface-2); border-radius: 5px; padding: 1px 6px; margin-right: 6px;
+}
+.tablebox { margin-top: 22px; }
+.tablebox button {
+  font: inherit; color: var(--accent); background: none; border: none;
+  padding: 0; cursor: pointer; text-decoration: underline;
+}
+.tablebox .scroller { overflow-x: auto; margin-top: 10px; }
+table { border-collapse: collapse; font-size: 12.5px; }
+th, td {
+  padding: 4px 10px; border-bottom: 1px solid var(--line); text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+th:first-child, td:first-child { text-align: left; font-family: ui-monospace, Menlo, Consolas, monospace; }
+footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
+</style>
+<div class="wrap">
+  <header>
+    <h1>Internal representation strength across sentence tokens</h1>
+    <p>Gemma 3 27B-it writes a fixed sentence while instructed to think (or not think)
+    about an unrelated word. Each point is the strength of the word&rsquo;s representation
+    in the residual stream at that output token &mdash; the analogue of Figure&nbsp;24 in
+    <em>Emergent Introspective Awareness in Large Language Models</em>.</p>
+  </header>
+
+  <div class="controls">
+    <div class="ctl"><label for="word">Word</label><select id="word"></select></div>
+    <div class="ctl"><label for="sent">Sentence</label><select id="sent"></select></div>
+    <div class="ctl"><label for="meas">Measurement</label>
+      <select id="meas">
+        <option value="word_tokens">Concept vector — word tokens</option>
+        <option value="paper">Concept vector — paper method</option>
+        <option value="sae">SAE latents (top-5 sum)</option>
+      </select></div>
+    <div class="ctl"><label for="base">Baseline</label>
+      <select id="base">
+        <option value="band">Control words (5–95% band)</option>
+        <option value="nomen">No-mention condition</option>
+        <option value="none">None</option>
+      </select></div>
+    <div class="ctl layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
+      <input type="range" id="layer" min="0" max="61" step="1" value="40"></div>
+  </div>
+
+  <div class="chips" id="chips"></div>
+  <div class="legend" id="legend"></div>
+  <figure>
+    <div class="chartbox">
+      <svg id="chart" width="100%" viewBox="0 0 1020 430" role="img"
+           aria-label="Per-token representation strength line chart"></svg>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+  </figure>
+
+  <section class="latents" id="latents" hidden>
+    <h2>Selected SAE latents at this layer</h2>
+    <ul id="latentlist"></ul>
+  </section>
+
+  <section class="tablebox">
+    <button id="tablebtn" aria-expanded="false">Show values as table</button>
+    <div class="scroller" id="tablewrap" hidden></div>
+  </section>
+
+  <footer id="meta"></footer>
+</div>
+
+<script id="payload" type="application/octet-stream">__DATA_B64__</script>
+<script>
+const COND = [
+  { id: "think", label: "think", cssVar: "--think" },
+  { id: "dont_think", label: "don't think", cssVar: "--dont" },
+  { id: "no_mention", label: "no mention", cssVar: "--nomen" },
+];
+const $ = (id) => document.getElementById(id);
+const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+let DB = null;
+const state = { word: null, si: null, meas: "word_tokens", base: "band", layer: 40, saeLayer: 40 };
+
+async function decodePayload() {
+  const b64 = $("payload").textContent.trim();
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const ds = new DecompressionStream("gzip");
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Response(stream).json();
+}
+
+function fillSelect(sel, opts, value) {
+  sel.innerHTML = "";
+  for (const o of opts) {
+    const el = document.createElement("option");
+    el.value = o.value; el.textContent = o.label;
+    sel.appendChild(el);
+  }
+  sel.value = value;
+}
+
+function currentSlot() { return DB.data[state.word][state.si]; }
+
+function isSAE() { return state.meas === "sae"; }
+
+function activeLayer() {
+  if (!isSAE()) return state.layer;
+  const ls = DB.sae_layers;
+  return ls.reduce((a, b) => Math.abs(b - state.saeLayer) < Math.abs(a - state.saeLayer) ? b : a);
+}
+
+function seriesData() {
+  // returns {conds: [{id,label,color,vals|null,excluded,completion}], band: {lo,hi}|null}
+  const slot = currentSlot();
+  const L = activeLayer();
+  const conds = [];
+  for (const c of COND) {
+    const rec = slot.conditions[c.id];
+    const isBaseCond = state.base === "nomen" && c.id === "no_mention";
+    if (!rec) { conds.push({ ...c, vals: null, excluded: false, missing: true, isBaseCond }); continue; }
+    let vals = null;
+    if (rec.exact) {
+      if (isSAE()) {
+        const li = DB.sae_layers.indexOf(L);
+        vals = rec.sae ? rec.sae[li] : null;
+      } else if (rec[state.meas]) {
+        vals = rec[state.meas].target[L];
+      }
+    }
+    conds.push({ ...c, vals, excluded: !rec.exact, completion: rec.completion, isBaseCond });
+  }
+  let band = null;
+  if (state.base === "band" && !isSAE()) {
+    const src = slot.conditions.think && slot.conditions.think.exact ? slot.conditions.think
+              : slot.conditions.no_mention;
+    if (src && src[state.meas]) {
+      band = { lo: src[state.meas].null05[L], hi: src[state.meas].null95[L] };
+    }
+  }
+  return { conds, band };
+}
+
+function render() {
+  const slot = currentSlot();
+  const { conds, band } = seriesData();
+  const tokens = slot.tokens;
+
+  // chips for excluded runs
+  const chips = $("chips"); chips.innerHTML = "";
+  for (const c of conds) {
+    if (c.excluded) {
+      const d = document.createElement("span");
+      d.className = "chip";
+      d.textContent = `${c.label}: excluded — model wrote “${c.completion}”`;
+      chips.appendChild(d);
+    }
+  }
+
+  // legend
+  const lg = $("legend"); lg.innerHTML = "";
+  for (const c of conds) {
+    if (!c.vals && !c.isBaseCond) continue;
+    const it = document.createElement("span"); it.className = "it";
+    const sw = document.createElement("span");
+    sw.className = "sw" + (c.isBaseCond ? " dash" : "");
+    if (!c.isBaseCond) sw.style.background = cssv(c.cssVar);
+    it.appendChild(sw);
+    it.appendChild(document.createTextNode(c.isBaseCond ? `${c.label} (baseline)` : c.label));
+    lg.appendChild(it);
+  }
+  if (band) {
+    const it = document.createElement("span"); it.className = "it";
+    const sw = document.createElement("span"); sw.className = "sw band";
+    sw.style.background = cssv("--null");
+    it.appendChild(sw);
+    it.appendChild(document.createTextNode("control words 5–95%"));
+    lg.appendChild(it);
+  }
+
+  drawChart(tokens, conds, band);
+  renderLatents(slot);
+  renderTable(tokens, conds, band);
+  $("meta").textContent =
+    `Run ${DB.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
+    (isSAE()
+      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, sum over selected latents`
+      : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
+}
+
+function drawChart(tokens, conds, band) {
+  const svg = $("chart");
+  const W = 1020, H = 430, m = { t: 16, r: 120, b: 86, l: 58 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const n = tokens.length;
+  const x = (i) => m.l + (n === 1 ? iw / 2 : (i * iw) / (n - 1));
+
+  let lo = 0, hi = 0;
+  const consider = (v) => { if (v == null) return; lo = Math.min(lo, v); hi = Math.max(hi, v); };
+  conds.forEach((c) => (c.vals || []).forEach(consider));
+  if (band) { band.lo.forEach(consider); band.hi.forEach(consider); }
+  if (hi === lo) hi = lo + 1;
+  const pad = (hi - lo) * 0.08;
+  lo -= pad; hi += pad;
+  const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+
+  const el = (tag, at) => {
+    const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in at) e.setAttribute(k, at[k]);
+    return e;
+  };
+  svg.innerHTML = "";
+
+  // y grid + ticks
+  const ticks = 5;
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + ((hi - lo) * i) / ticks;
+    const yy = y(v);
+    svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "grid" }));
+    const t = el("text", { x: m.l - 8, y: yy + 4, "text-anchor": "end", "font-size": 11 });
+    t.textContent = Math.abs(hi - lo) < 5 ? v.toFixed(2) : v.toFixed(0);
+    svg.appendChild(t);
+  }
+  if (lo < 0 && hi > 0) {
+    svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: y(0), y2: y(0), class: "zero" }));
+  }
+  // y axis label
+  const yl = el("text", { x: 14, y: m.t + ih / 2, "font-size": 11.5,
+    transform: `rotate(-90 14 ${m.t + ih / 2})`, "text-anchor": "middle" });
+  yl.textContent = isSAE() ? "selected-latent activation (sum)" : "cosine with concept vector";
+  svg.appendChild(yl);
+
+  // band
+  if (band) {
+    let d = "";
+    for (let i = 0; i < n; i++) d += `${i ? "L" : "M"}${x(i)},${y(band.hi[i])}`;
+    for (let i = n - 1; i >= 0; i--) d += `L${x(i)},${y(band.lo[i])}`;
+    svg.appendChild(el("path", { d: d + "Z", fill: cssv("--null"), opacity: 0.4 }));
+  }
+
+  // token tick labels
+  tokens.forEach((tok, i) => {
+    const t = el("text", {
+      x: x(i), y: m.t + ih + 16, class: "tok", "text-anchor": "end",
+      transform: `rotate(-38 ${x(i)} ${m.t + ih + 16})`,
+    });
+    t.textContent = tok;
+    svg.appendChild(t);
+  });
+
+  // series
+  for (const c of conds) {
+    if (!c.vals) continue;
+    const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+    let d = "";
+    c.vals.forEach((v, i) => { d += `${i ? "L" : "M"}${x(i)},${y(v)}`; });
+    svg.appendChild(el("path", {
+      d, fill: "none", stroke: color, "stroke-width": 2,
+      "stroke-dasharray": c.isBaseCond ? "5 4" : "none",
+      "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+    c.vals.forEach((v, i) => {
+      svg.appendChild(el("circle", { cx: x(i), cy: y(v), r: 3, fill: color }));
+    });
+    // direct label at line end
+    const t = el("text", {
+      x: m.l + iw + 8, y: y(c.vals[n - 1]) + 4, "font-size": 12, fill: color,
+    });
+    t.textContent = c.isBaseCond ? `${c.label} (base)` : c.label;
+    t.style.fill = color;
+    svg.appendChild(t);
+  }
+
+  // hover layer: one hit column per token
+  const tip = $("tooltip");
+  const guide = el("line", { y1: m.t, y2: m.t + ih, stroke: cssv("--ink-2"),
+    "stroke-width": 1, "stroke-dasharray": "3 3", visibility: "hidden" });
+  svg.appendChild(guide);
+  const half = n > 1 ? (x(1) - x(0)) / 2 : iw / 2;
+  tokens.forEach((tok, i) => {
+    const hit = el("rect", {
+      x: x(i) - half, y: m.t, width: half * 2, height: ih, fill: "transparent",
+    });
+    hit.addEventListener("mousemove", (ev) => {
+      guide.setAttribute("x1", x(i)); guide.setAttribute("x2", x(i));
+      guide.setAttribute("visibility", "visible");
+      let html = `<div class="tt">“${tok.replace(/&/g, "&amp;").replace(/</g, "&lt;")}”</div>`;
+      for (const c of conds) {
+        if (!c.vals) continue;
+        const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+        html += `<div class="row"><span style="color:${color}">${c.label}</span><b>${c.vals[i].toFixed(isSAE() ? 1 : 3)}</b></div>`;
+      }
+      if (band) html += `<div class="row"><span>control 5–95%</span><b>${band.lo[i].toFixed(2)}…${band.hi[i].toFixed(2)}</b></div>`;
+      tip.innerHTML = html;
+      tip.style.display = "block";
+      const box = svg.getBoundingClientRect();
+      const px = (x(i) / W) * box.width;
+      tip.style.left = Math.min(px + 14, box.width - 190) + "px";
+      tip.style.top = Math.max(ev.clientY - box.top - 40, 6) + "px";
+    });
+    hit.addEventListener("mouseleave", () => {
+      tip.style.display = "none"; guide.setAttribute("visibility", "hidden");
+    });
+    svg.appendChild(hit);
+  });
+}
+
+function renderLatents(slot) {
+  const box = $("latents");
+  if (!isSAE() || !slot.sae_latents) { box.hidden = true; return; }
+  const L = activeLayer();
+  const meta = slot.sae_latents.find((m) => m.layer === L);
+  const ul = $("latentlist"); ul.innerHTML = "";
+  for (const e of meta ? meta.latents : []) {
+    const li = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = `#${e.latent}`;
+    li.appendChild(code);
+    li.appendChild(document.createTextNode(e.label || "(no label)"));
+    ul.appendChild(li);
+  }
+  box.hidden = !meta || !meta.latents.length;
+}
+
+function renderTable(tokens, conds, band) {
+  const wrap = $("tablewrap");
+  if (wrap.hidden) return;
+  const rows = conds.filter((c) => c.vals);
+  let h = "<table><thead><tr><th>token</th>";
+  for (const c of rows) h += `<th>${c.label}</th>`;
+  if (band) h += "<th>ctl q05</th><th>ctl q95</th>";
+  h += "</tr></thead><tbody>";
+  tokens.forEach((tok, i) => {
+    h += `<tr><td>${tok.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</td>`;
+    for (const c of rows) h += `<td>${c.vals[i].toFixed(isSAE() ? 1 : 3)}</td>`;
+    if (band) h += `<td>${band.lo[i].toFixed(3)}</td><td>${band.hi[i].toFixed(3)}</td>`;
+    h += "</tr>";
+  });
+  wrap.innerHTML = h + "</tbody></table>";
+}
+
+function syncControls() {
+  const meas = state.meas;
+  const layer = $("layer");
+  if (isSAE()) {
+    layer.min = 0; layer.max = DB.sae_layers.length - 1; layer.step = 1;
+    layer.value = DB.sae_layers.indexOf(activeLayer());
+    $("layerval").textContent = activeLayer() + " (SAE)";
+  } else {
+    layer.min = 0; layer.max = DB.n_layers - 1; layer.step = 1;
+    layer.value = state.layer;
+    $("layerval").textContent = state.layer;
+  }
+  const baseSel = $("base");
+  baseSel.querySelector('option[value="band"]').disabled = isSAE();
+  if (isSAE() && state.base === "band") { state.base = "nomen"; baseSel.value = "nomen"; }
+}
+
+function init(db) {
+  DB = db;
+  const words = Object.keys(db.data).sort();
+  state.word = words[0];
+  fillSelect($("word"), words.map((w) => ({ value: w, label: w })), state.word);
+
+  const syncSentences = () => {
+    const sis = Object.keys(db.data[state.word]);
+    if (!sis.includes(state.si)) state.si = sis[0];
+    fillSelect($("sent"), sis.map((si) => ({
+      value: si, label: `s${si.padStart(2, "0")} — ${db.data[state.word][si].sentence}`,
+    })), state.si);
+  };
+  syncSentences();
+
+  $("word").addEventListener("change", (e) => { state.word = e.target.value; syncSentences(); render(); });
+  $("sent").addEventListener("change", (e) => { state.si = e.target.value; render(); });
+  $("meas").addEventListener("change", (e) => { state.meas = e.target.value; syncControls(); render(); });
+  $("base").addEventListener("change", (e) => { state.base = e.target.value; render(); });
+  $("layer").addEventListener("input", (e) => {
+    if (isSAE()) state.saeLayer = DB.sae_layers[+e.target.value];
+    else state.layer = +e.target.value;
+    syncControls(); render();
+  });
+  $("tablebtn").addEventListener("click", () => {
+    const w = $("tablewrap");
+    w.hidden = !w.hidden;
+    $("tablebtn").textContent = w.hidden ? "Show values as table" : "Hide table";
+    $("tablebtn").setAttribute("aria-expanded", String(!w.hidden));
+    render();
+  });
+  new MutationObserver(render).observe(document.documentElement,
+    { attributes: true, attributeFilter: ["data-theme"] });
+
+  syncControls();
+  render();
+}
+
+decodePayload().then(init).catch((e) => {
+  document.querySelector(".wrap").insertAdjacentHTML("beforeend",
+    `<p style="color:#c33">Failed to decode embedded data: ${e}</p>`);
+});
+</script>
