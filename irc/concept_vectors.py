@@ -34,6 +34,71 @@ def prompt_activations(
     return {"last_prompt": last_prompt, "response_mean": response_mean}
 
 
+# Paper-faithful extraction (appendix 12.1.1): activations at the final prompt
+# token of "Tell me about {word}." (word lowercase) — for Gemma's chat template
+# this is the last token of the generation prompt, the analogue of the paper's
+# final ":" of "Assistant:".
+PAPER_TEMPLATE = "Tell me about {word}."
+
+
+@torch.no_grad()
+def last_token_activations(model, tokenizer, text: str, layers: list[int]) -> torch.Tensor:
+    """(n_layers, d_model) fp32 cpu activation at the final prompt token."""
+    ids = chat_ids(tokenizer, text)
+    with ResidualCapture(model, layers) as cap:
+        model(ids)
+    return torch.stack([cap.acts[i][0, -1] for i in layers])
+
+
+def build_vector_bank(
+    model,
+    tokenizer,
+    variant: str,
+    words: list[str],
+    baseline_words: list[str],
+    templates: list[str] | None = None,
+    log_every: int = 25,
+) -> dict:
+    """Compute concept vectors for `words` (concept + control) in one variant.
+
+    variant "paper": last-prompt-token of "Tell me about {word}.".
+    variant "word_tokens": mean activation at the word's own tokens across
+    `templates`.
+    Returns {"vectors": {word: (n_layers, d_model)}, "baseline_mean": tensor,
+    "raw": {word: tensor}} — all fp32 cpu; words keyed as given (capitalized).
+    """
+    layers = list(range(len(get_decoder_layers(model))))
+
+    def acts_for(word: str) -> torch.Tensor:
+        w = word.lower()
+        if variant == "paper":
+            return last_token_activations(
+                model, tokenizer, PAPER_TEMPLATE.format(word=w), layers
+            )
+        if variant == "word_tokens":
+            assert templates
+            return torch.stack(
+                [word_token_activations(model, tokenizer, t, w, layers) for t in templates]
+            ).mean(dim=0)
+        raise ValueError(f"unknown variant {variant!r}")
+
+    baseline_sum = None
+    for i, w in enumerate(baseline_words):
+        a = acts_for(w)
+        baseline_sum = a if baseline_sum is None else baseline_sum + a
+        if (i + 1) % log_every == 0:
+            print(f"  [{variant}] baseline {i + 1}/{len(baseline_words)}")
+    baseline_mean = baseline_sum / len(baseline_words)
+
+    raw = {}
+    for i, w in enumerate(words):
+        raw[w] = acts_for(w)
+        if (i + 1) % log_every == 0:
+            print(f"  [{variant}] words {i + 1}/{len(words)}")
+    vectors = {w: a - baseline_mean for w, a in raw.items()}
+    return {"vectors": vectors, "baseline_mean": baseline_mean, "raw": raw}
+
+
 def _word_token_span(tokenizer, ids: torch.Tensor, full_text: str, word: str) -> slice:
     """Locate the token positions covering `word` in the tokenized chat string."""
     enc = tokenizer(full_text, return_offsets_mapping=True, add_special_tokens=False)
