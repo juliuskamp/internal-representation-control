@@ -18,6 +18,30 @@ SNAP="${1:-$DEFAULT_SNAP}"
 export PATH="$HERE/.venv/bin:/usr/local/cuda/bin:$PATH"
 export CUDA_HOME=/usr/local/cuda
 
+# Preflight: bust a stale flashinfer JIT cache. The cache is keyed only by
+# flashinfer version + GPU arch (e.g. 0.6.1/120a), NOT by venv path. If .venv
+# was rebuilt (or a different venv previously populated the cache), the cached
+# build.ninja files still carry -isystem include paths into the OLD venv, and
+# ninja fails mid-launch during cuda-graph capture with:
+#   fatal error: flashinfer/attention/decode.cuh: No such file or directory
+# The cache is pure regenerable compile output, so if a baked include path no
+# longer resolves, clear it and let this launch recompile (a few minutes).
+# Kept on the root disk (/root, ~18 GB free) deliberately — /workspace is at
+# ~99% (holds the 108 GB AV checkpoint). See notes/nla_setup.md.
+FI_CACHE="${FLASHINFER_CACHE_DIR:-${HOME:-/root}/.cache/flashinfer}"
+if [ -d "$FI_CACHE" ]; then
+    stale_inc="$(grep -rhoE --include=build.ninja \
+        'isystem +[^ ]*/site-packages/flashinfer/data/include' "$FI_CACHE" \
+        2>/dev/null | awk '{print $2}' | head -1 || true)"
+    if [ -n "$stale_inc" ] && [ ! -d "$stale_inc" ]; then
+        echo "warning: flashinfer JIT cache is stale (built by a different/" >&2
+        echo "  rebuilt venv). Baked include path no longer exists:" >&2
+        echo "    $stale_inc" >&2
+        echo "  clearing $FI_CACHE — kernels recompile on this launch." >&2
+        rm -rf "$FI_CACHE"
+    fi
+fi
+
 # --disable-radix-cache is REQUIRED (cache keys on token ids, which
 # input_embeds requests don't have). --dtype bfloat16: shards are fp32.
 exec "$HERE/.venv/bin/python" -m sglang.launch_server \

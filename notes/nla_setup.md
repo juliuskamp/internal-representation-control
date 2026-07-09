@@ -48,6 +48,39 @@ uv run python scripts/nla_explain.py --run-id run1-core \
 `input_embeds` requests don't have). `--dtype bfloat16` because the shards
 are fp32 (108 GB > 96 GB VRAM); the actor was trained in bf16 anyway.
 
+## Troubleshooting: stale flashinfer JIT cache across venvs
+
+Symptom: the server dies at startup during "Capture cuda graph" with a ninja
+build failure whose root cause is
+`fatal error: flashinfer/attention/decode.cuh: No such file or directory`
+(the headers exist; the compiler just isn't pointed at them).
+
+Cause: flashinfer JIT-compiles Blackwell (`sm_120`, dir `120a`) attention
+kernels on first launch and caches them under `/root/.cache/flashinfer`. That
+cache is keyed **only by flashinfer version + GPU arch** (e.g. `0.6.1/120a`),
+**not by venv path**. Each cached `build.ninja` bakes absolute `-isystem`
+include paths into the venv that produced it. So if `nla_server/.venv` is
+rebuilt (re-running `setup.sh`), or a *different* venv previously populated the
+cache, the stale `build.ninja` still points `-isystem` at the old venv's
+`site-packages/flashinfer/data/include`; when a kernel needs a (re)compile,
+ninja can't find the headers and exits 1. Hit once (2026-07-09) after the cache
+was first built from `/root/nla-venv`, then the project venv was rebuilt at
+`nla_server/.venv`.
+
+Fix: delete the cache — it is pure regenerable compile output, ~16 MB partial
+(a full build is larger; measure with `du -sh` after a clean launch):
+
+```bash
+rm -rf /root/.cache/flashinfer      # recompiles on next launch (a few minutes)
+```
+
+`launch.sh` now does this automatically: a preflight greps the cached
+`build.ninja` files and, if a baked flashinfer include path no longer exists,
+clears the cache before starting (prints a warning). The cache is kept on the
+root disk (`/root`, ~18 GB free) on purpose — **do not** relocate it to a
+venv-local path via `FLASHINFER_CACHE_DIR`, because `/workspace` sits at ~99%
+(it holds the 108 GB AV checkpoint).
+
 ## Layer indexing (important)
 
 NLA `layer_index=41` = **output of decoder block 41** (resid_post), per
