@@ -176,17 +176,22 @@ def main() -> None:
     if out_path.exists():
         with open(out_path) as f:
             for line in f:
-                r = json.loads(line)
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # partial trailing line from an interrupted write
                 done.add((r["key"], r["position"], r["target_word"],
                           r["prompt_version"], r["judge_model"]))
 
     template = JUDGE_PROMPTS[JUDGE_PROMPT_VERSION]
     client = httpx.Client(headers={"Authorization": f"Bearer {api_key}"})
 
-    per_slot: dict[tuple[str, str], int] = {}
-    n_done = 0
-    out = None if args.pilot else open(out_path, "a")
-    try:
+    def iter_pending():
+        """Yield (row, target) still needing a judgment: not already in the
+        output file (resume) and within the per-(word, condition) --limit.
+        Iterates the in-memory expl_rows, so it is cheap to run twice — once
+        to size the progress indicator, once to drive the judging."""
+        per_slot: dict[tuple[str, str], int] = {}
         for row, target in iter_tasks(expl_rows, args.words):
             ident = (row["key"], row["position"], target,
                      JUDGE_PROMPT_VERSION, args.model)
@@ -197,7 +202,21 @@ def main() -> None:
             if args.limit is not None and per_slot[slot] >= args.limit:
                 continue
             per_slot[slot] += 1
+            yield row, target
 
+    # Cheap first pass (no network) to size the progress indicator.
+    total = sum(1 for _ in iter_pending())
+    if total == 0:
+        print("nothing to judge — all explanations already judged (or filtered "
+              "out). Bump the prompt version or pass a different --model to redo.")
+        return
+    if not args.pilot:
+        print(f"judging {total} explanation(s) with {args.model}")
+
+    n_done = 0
+    out = None if args.pilot else open(out_path, "a")
+    try:
+        for row, target in iter_pending():
             prompt = template.format(
                 word=target.lower(),  # concept words are stored Capitalized
                 sentence=sentences[row["sentence_idx"]],
@@ -251,7 +270,8 @@ def main() -> None:
             out.flush()
             n_done += 1
             exp_str = f"{expected:.1f}" if expected is not None else "?"
-            print(f"[{n_done}] {row['key']} pos={row['position']} vs "
+            print(f"[{n_done}/{total} {100 * n_done // total}%] "
+                  f"{row['key']} pos={row['position']} vs "
                   f"{target}: {sampled} (E={exp_str})")
     finally:
         if out is not None:
