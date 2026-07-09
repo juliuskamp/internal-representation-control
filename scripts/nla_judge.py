@@ -133,6 +133,9 @@ def main() -> None:
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--words", nargs="*", default=None,
                     help="Target concept words (Capitalized). Default: all.")
+    ap.add_argument("--sentences", nargs="*", type=int, default=None,
+                    help="Restrict to these sentence indices (matches "
+                         "nla_explain.py --sentences). Default: all.")
     ap.add_argument("--conditions", nargs="*",
                     default=["think", "dont_think", "no_mention"])
     ap.add_argument("--agg", choices=["mean", "token"], default="token",
@@ -165,6 +168,12 @@ def main() -> None:
     with open(expl_path) as f:
         expl_rows = [json.loads(line) for line in f]
     expl_rows = [r for r in expl_rows if r["condition"] in args.conditions]
+    # Restrict the row set before iter_tasks so no_mention rows are also judged
+    # only against words present on the kept sentences (words_by_sentence is
+    # rebuilt from this filtered set).
+    if args.sentences is not None:
+        keep = set(args.sentences)
+        expl_rows = [r for r in expl_rows if r["sentence_idx"] in keep]
 
     sentences: dict[int, str] = {}
     with open(run_dir / "generations.jsonl") as f:
