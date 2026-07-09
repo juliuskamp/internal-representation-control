@@ -35,6 +35,7 @@ from pathlib import Path
 
 import httpx
 
+from irc.constants import NLA_LAYER
 from irc.nla_judge_prompt import JUDGE_PROMPT_VERSION, JUDGE_PROMPTS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -143,7 +144,7 @@ def main() -> None:
     ap.add_argument("--agg", choices=["mean", "token"], default="token",
                     help="Which explanations file to judge (matches "
                          "nla_explain.py --agg).")
-    ap.add_argument("--layer", type=int, default=41)
+    ap.add_argument("--layer", type=int, default=NLA_LAYER)
     ap.add_argument("--model", default="openai/gpt-4.1")
     ap.add_argument("--max-tokens", type=int, default=200)
     ap.add_argument("--limit", type=int, default=None,

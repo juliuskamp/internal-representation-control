@@ -7,12 +7,13 @@ from irc import env  # noqa: F401
 import torch
 from sae_lens import SAE
 
+from irc.constants import SAE_ID_TEMPLATE, SAE_RELEASE
 from irc.model import ResidualCapture, chat_ids, load_model, load_tokenizer
 
-# Matches the SAE Neuronpedia indexed for this model (see smoke test D).
-RELEASE = "gemma-scope-2-27b-it-res"
-SAE_ID = "layer_31_width_16k_l0_medium"
+# Pinned SAE variant (matches Neuronpedia's index; see irc/constants.py).
+RELEASE = SAE_RELEASE
 LAYER = 31
+SAE_ID = SAE_ID_TEMPLATE.format(layer=LAYER)
 
 
 def main() -> None:

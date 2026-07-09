@@ -16,7 +16,7 @@ from pathlib import Path
 
 import tyro
 
-from irc import pipeline
+from irc import constants, pipeline
 from irc.words_paper import CONCEPT_WORDS_PAPER
 
 
@@ -28,8 +28,8 @@ class Config:
     sentences_per_word: int = 2
     conditions: tuple[str, ...] = ("think", "dont_think", "no_mention")
     words: tuple[str, ...] = ()  # empty = all 50 paper concept words
-    vector_variants: tuple[str, ...] = ("paper", "word_tokens")
-    sae_layers: tuple[int, ...] = (16, 31, 40, 53)
+    vector_variants: tuple[str, ...] = constants.VECTOR_VARIANTS
+    sae_layers: tuple[int, ...] = constants.SAE_LAYERS
     topk_latents: int = 5
     neuronpedia: bool = True
 
@@ -48,8 +48,8 @@ def main(cfg: Config) -> None:
     (run_dir / "config.json").write_text(json.dumps({
         **dataclasses.asdict(cfg),
         "model_id": MODEL_ID,
-        "sae_release": pipeline.SAE_RELEASE,
-        "sae_id_template": pipeline.SAE_ID_TEMPLATE,
+        "sae_release": constants.SAE_RELEASE,
+        "sae_id_template": constants.SAE_ID_TEMPLATE,
         "git_commit": commit,
         "torch": torch.__version__,
         "transformers": transformers.__version__,

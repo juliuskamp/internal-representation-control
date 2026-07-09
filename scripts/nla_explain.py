@@ -27,6 +27,7 @@ from pathlib import Path
 
 import torch
 
+from irc.constants import NLA_LAYER
 from irc.vendor.nla_inference import NLAClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,7 +36,6 @@ AV_CHECKPOINT = Path(
     "/workspace/hf-cache/hub/models--kitft--nla-gemma3-27b-L41-av/snapshots/"
     "4e721238131ffb8348cff260fe81b8b34a270a0d"
 )
-NLA_LAYER = 41  # extraction_layer_index from nla_meta.yaml
 
 
 def iter_generations(run_dir: Path, words: list[str] | None, conditions: list[str]):

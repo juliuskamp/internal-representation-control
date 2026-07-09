@@ -40,12 +40,11 @@ from pathlib import Path
 import torch
 import tyro
 
+from irc.constants import N_LAYERS, NLA_LAYER, SAE_LAYERS
+from irc.constants import VECTOR_VARIANTS as VARIANTS
 from irc.pipeline import _load_records, _load_saes
 from irc.words_paper import CONTROL_WORDS_PAPER
 
-VARIANTS = ("paper", "word_tokens")
-SAE_LAYERS = [16, 31, 40, 53]
-NLA_LAYER = 41  # extraction layer of the NLA actor (see notes/nla_setup.md)
 DATA_DIR = Path("docs/data")
 
 
@@ -254,8 +253,8 @@ def main(cfg: Config) -> None:
 
     (DATA_DIR / "index.json").write_text(json.dumps({
         "run_id": cfg.run_id,
-        "sae_layers": SAE_LAYERS,
-        "n_layers": 62,
+        "sae_layers": list(SAE_LAYERS),
+        "n_layers": N_LAYERS,
         "variants": list(VARIANTS),
         "nla_layer": NLA_LAYER,
         "nla_judge": judge_meta,

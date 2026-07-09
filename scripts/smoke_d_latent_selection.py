@@ -14,14 +14,14 @@ import urllib.request
 import torch
 from sae_lens import SAE
 
+from irc.constants import SAE_ID_TEMPLATE, SAE_RELEASE
 from irc.model import ResidualCapture, chat_ids, load_model, load_tokenizer
 
-# This release/id matches what Neuronpedia indexed for gemma-3-27b-it
-# (source "{layer}-gemmascope-2-res-16k" = layer_{n}_width_16k_l0_medium),
-# so latent indices line up with its auto-interp labels.
-RELEASE = "gemma-scope-2-27b-it-res"
-SAE_ID = "layer_31_width_16k_l0_medium"
+# Pinned SAE variant: latent indices line up with Neuronpedia's auto-interp
+# labels ("{layer}-gemmascope-2-res-16k"); see irc/constants.py.
+RELEASE = SAE_RELEASE
 LAYER = 31
+SAE_ID = SAE_ID_TEMPLATE.format(layer=LAYER)
 TOP_K = 8
 
 CONCEPT_TEXTS = [
