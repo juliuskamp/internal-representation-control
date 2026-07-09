@@ -23,7 +23,6 @@ from irc import env  # noqa: F401  (must be first: loads .env, sets HF_HOME)
 import dataclasses
 import json
 import os
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Literal
 
@@ -33,6 +32,7 @@ import tyro
 from irc.constants import NLA_LAYER, NLA_REPO
 from irc.model import sentence_token_ids
 from irc.paths import RUNS
+from irc.util import iter_jsonl, run_bounded
 from irc.vendor.nla_inference import _EMBED_KEY_SUFFIXES, NLAClient
 
 # Everything NLAClient reads except the weight shards: tokenizer, configs,
@@ -125,17 +125,10 @@ def main(args: Config) -> None:
     client = NLAClient(resolve_checkpoint(), sglang_url=args.sglang_url)
 
     # Resume: collect (key, position) pairs already in the output file so an
-    # interrupted run continues instead of appending duplicates. Tolerates a
-    # truncated final line from a killed process.
+    # interrupted run continues instead of appending duplicates.
     done: set[tuple[str, object]] = set()
     if args.resume and out_path.exists():
-        with open(out_path) as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # partial trailing line from an interrupted write
-                done.add((rec["key"], rec["position"]))
+        done = {(rec["key"], rec["position"]) for rec in iter_jsonl(out_path)}
         if done:
             print(f"[resume] {len(done)} explanations already in {out_path.name}"
                   f" — skipping those")
@@ -212,35 +205,19 @@ def main(args: Config) -> None:
         }
         return row, pos, rec
 
-    # Bounded producer/consumer: keep ~2×concurrency requests in flight so the
-    # GPU batcher stays fed while the main thread loads the next acts + writes
-    # completed rows. Results are written as they finish (order is not
-    # significant — each jsonl row is self-describing via `key`/`position`).
+    # Bounded producer/consumer (run_bounded): keeps the GPU batcher fed while
+    # the main thread loads the next acts + writes completed rows. Results are
+    # written as they finish (order is not significant — each jsonl row is
+    # self-describing via `key`/`position`).
     n_done = 0
-    tasks = iter_tasks()
-    max_inflight = max(1, args.concurrency) * 2
-    with open(out_path, "a") as out, \
-            ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
-        inflight = set()
-        for _ in range(max_inflight):
-            try:
-                inflight.add(ex.submit(decode, next(tasks)))
-            except StopIteration:
-                break
-        while inflight:
-            finished, inflight = wait(inflight, return_when=FIRST_COMPLETED)
-            for fut in finished:
-                row, pos, rec = fut.result()
-                out.write(json.dumps(rec) + "\n")
-                out.flush()
-                n_done += 1
-                print(f"[{n_done}/{total} {100 * n_done // total}%] "
-                      f"{rec['key']} pos={pos} norm={rec['norm']:.0f}\n"
-                      f"    {rec['explanation'][:160]}")
-                try:
-                    inflight.add(ex.submit(decode, next(tasks)))
-                except StopIteration:
-                    pass
+    with open(out_path, "a") as out:
+        for row, pos, rec in run_bounded(iter_tasks(), decode, args.concurrency):
+            out.write(json.dumps(rec) + "\n")
+            out.flush()
+            n_done += 1
+            print(f"[{n_done}/{total} {100 * n_done // total}%] "
+                  f"{rec['key']} pos={pos} norm={rec['norm']:.0f}\n"
+                  f"    {rec['explanation'][:160]}")
 
     print(f"\nwrote {n_done} explanations to {out_path}")
 

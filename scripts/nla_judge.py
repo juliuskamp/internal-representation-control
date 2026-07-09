@@ -28,9 +28,7 @@ import json
 import math
 import os
 import re
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
 
@@ -40,6 +38,7 @@ import tyro
 from irc.constants import NLA_LAYER
 from irc.nla_judge_prompt import JUDGE_PROMPT_VERSION, JUDGE_PROMPTS
 from irc.paths import RUNS
+from irc.util import iter_jsonl, run_bounded
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -172,9 +171,8 @@ def main(args: Config) -> None:
         run_dir / "results" / f"nla_judgments_{args.agg}_L{args.layer}.jsonl"
     )
 
-    with open(expl_path) as f:
-        expl_rows = [json.loads(line) for line in f]
-    expl_rows = [r for r in expl_rows if r["condition"] in args.conditions]
+    expl_rows = [r for r in iter_jsonl(expl_path)
+                 if r["condition"] in args.conditions]
     # Restrict the row set before iter_tasks so no_mention rows are also judged
     # only against words present on the kept sentences (words_by_sentence is
     # rebuilt from this filtered set).
@@ -190,14 +188,9 @@ def main(args: Config) -> None:
 
     done: set[tuple] = set()
     if out_path.exists():
-        with open(out_path) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # partial trailing line from an interrupted write
-                done.add((r["key"], r["position"], r["target_word"],
-                          r["prompt_version"], r["judge_model"]))
+        done = {(r["key"], r["position"], r["target_word"],
+                 r["prompt_version"], r["judge_model"])
+                for r in iter_jsonl(out_path)}
 
     template = JUDGE_PROMPTS[JUDGE_PROMPT_VERSION]
     client = httpx.Client(headers={"Authorization": f"Bearer {api_key}"})
@@ -299,28 +292,22 @@ def main(args: Config) -> None:
     print(f"judging {total} explanation(s) with {args.model} "
           f"(concurrency={args.concurrency})")
 
+    # Results are written as they complete (order-independent; resume is
+    # keyed on the fields collected into `done` above).
     n_done = 0
-    write_lock = threading.Lock()
-    out = open(out_path, "a")
-    try:
-        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-            futures = [pool.submit(process_task, row, target)
-                       for row, target in pending]
-            for fut in as_completed(futures):
-                rec, warnings, _ = fut.result()
-                with write_lock:
-                    for w in warnings:
-                        print("  WARNING " + w)
-                    out.write(json.dumps(rec) + "\n")
-                    out.flush()
-                    n_done += 1
-                    expected = rec["score_expected"]
-                    exp_str = f"{expected:.1f}" if expected is not None else "?"
-                    print(f"[{n_done}/{total} {100 * n_done // total}%] "
-                          f"{rec['key']} pos={rec['position']} vs "
-                          f"{rec['target_word']}: {rec['score']} (E={exp_str})")
-    finally:
-        out.close()
+    with open(out_path, "a") as out:
+        for rec, warnings, _ in run_bounded(
+                pending, lambda t: process_task(*t), args.concurrency):
+            for w in warnings:
+                print("  WARNING " + w)
+            out.write(json.dumps(rec) + "\n")
+            out.flush()
+            n_done += 1
+            expected = rec["score_expected"]
+            exp_str = f"{expected:.1f}" if expected is not None else "?"
+            print(f"[{n_done}/{total} {100 * n_done // total}%] "
+                  f"{rec['key']} pos={rec['position']} vs "
+                  f"{rec['target_word']}: {rec['score']} (E={exp_str})")
 
     print(f"\nwrote {n_done} judgments to {out_path}")
 
