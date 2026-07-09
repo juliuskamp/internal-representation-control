@@ -23,6 +23,10 @@ python -m http.server -d docs                                # view at localhost
 
 # Smoke tests (a: generation, b: SAE, c: concept vector, d: latent selection)
 uv run python scripts/smoke_a_generate.py
+
+# NLA explanations (decode stored activations to text; see notes/nla_setup.md)
+bash nla_server/setup.sh && bash nla_server/launch.sh   # SGLang server, own py3.12 venv
+uv run python scripts/nla_explain.py --run-id run1-core --words Dust --limit 3
 ```
 
 Requires a GPU with ~55 GB VRAM (bf16) and `.env` at the repo root with `HF_TOKEN` (see `.env.example`). The `measure` stage and `export_viz_data.py` don't need the LLM, only stored activations + SAEs.
