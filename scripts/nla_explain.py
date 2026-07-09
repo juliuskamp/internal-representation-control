@@ -111,9 +111,13 @@ def main() -> None:
             print(f"[resume] {len(done)} explanations already in {out_path.name}"
                   f" — skipping those")
 
-    def iter_tasks():
-        """Yield (row, pos, vector) tasks. Loads acts lazily so disk I/O
-        overlaps with in-flight generation rather than blocking startup."""
+    def iter_row_positions():
+        """Yield (row, positions) for rows passing the filters, where positions
+        is the list of position ids still to decode (after resume-skipping).
+        Does NOT load acts: the token-mode position count comes from tokenizing
+        the sentence, which is exactly what decode truncates the acts to (the
+        `layer_acts.shape[0] >= n_sent` assert below guarantees it). Cheap
+        enough to run twice — once to count, once to drive generation."""
         per_slot: dict[tuple[str, str], int] = {}
         for row in iter_generations(run_dir, args.words, args.conditions):
             if args.sentences and row["sentence_idx"] not in args.sentences:
@@ -125,15 +129,29 @@ def main() -> None:
             per_slot[slot] += 1
 
             if args.agg == "mean":
-                positions = ["mean"]
+                positions: list[object] = ["mean"]
             else:
-                positions = None  # token count not known until acts are loaded
-            # Skip the disk read entirely when every position for this row is
-            # already done (mean: the one "mean" row; token: needs the load).
-            if positions is not None and all(
-                    (row["key"], p) in done for p in positions):
-                continue
+                n_sent = len(client.tokenizer(
+                    row["sentence"], add_special_tokens=False)["input_ids"])
+                positions = list(range(n_sent))
+            positions = [p for p in positions if (row["key"], p) not in done]
+            if positions:  # skip fully-done rows (no acts load happens for them)
+                yield row, positions
 
+    # Cheap first pass over the filters to size the progress bar. Only tokenizes
+    # sentences (no acts loaded), so it's fast even in token mode.
+    total = sum(len(positions) for _, positions in iter_row_positions())
+    if total == 0:
+        print("nothing to decode — all requested tasks are already done "
+              "(or filtered out). Pass --no-resume to redo.")
+        return
+    print(f"decoding {total} explanation(s), concurrency={args.concurrency}")
+
+    def iter_tasks():
+        """Yield (row, pos, vector) tasks. Loads acts lazily (once per row, and
+        only for rows with remaining positions) so disk I/O overlaps with
+        in-flight generation rather than blocking startup."""
+        for row, positions in iter_row_positions():
             acts = torch.load(run_dir / row["acts_file"], map_location="cpu")
             layer_acts = acts[args.layer].float()  # [tokens, d_model]
             n_sent = len(client.tokenizer(
@@ -143,13 +161,11 @@ def main() -> None:
             layer_acts = layer_acts[:n_sent]  # drop trailing whitespace token(s)
 
             if args.agg == "mean":
-                vectors = [("mean", layer_acts.mean(dim=0))]
+                vecs = {"mean": layer_acts.mean(dim=0)}
             else:
-                vectors = [(t, layer_acts[t]) for t in range(layer_acts.shape[0])]
-            for pos, v in vectors:
-                if (row["key"], pos) in done:
-                    continue
-                yield row, pos, v
+                vecs = {t: layer_acts[t] for t in range(layer_acts.shape[0])}
+            for pos in positions:
+                yield row, pos, vecs[pos]
 
     def decode(task):
         """Runs on a worker thread: blocking HTTP round-trip to SGLang. The
@@ -185,14 +201,15 @@ def main() -> None:
             except StopIteration:
                 break
         while inflight:
-            done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
-            for fut in done:
+            finished, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+            for fut in finished:
                 row, pos, rec = fut.result()
                 out.write(json.dumps(rec) + "\n")
                 out.flush()
                 n_done += 1
-                print(f"[{n_done}] {rec['key']} pos={pos} "
-                      f"norm={rec['norm']:.0f}\n    {rec['explanation'][:160]}")
+                print(f"[{n_done}/{total} {100 * n_done // total}%] "
+                      f"{rec['key']} pos={pos} norm={rec['norm']:.0f}\n"
+                      f"    {rec['explanation'][:160]}")
                 try:
                     inflight.add(ex.submit(decode, next(tasks)))
                 except StopIteration:
