@@ -16,17 +16,17 @@ from irc import env  # noqa: F401
 
 import json
 import time
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 
 from irc.concept_vectors import concept_vector_word_tokens
 from irc.model import MODEL_ID, ResidualCapture, chat_ids, load_model, load_tokenizer
+from irc.paths import ARTIFACTS
 from irc.words import RANDOM_WORDS_V1, WORD_TEMPLATES_V1
 
 CONCEPT = "football"
-CACHE = Path("artifacts/concept_vectors")
+CACHE = ARTIFACTS / "concept_vectors"
 LAYERS_SHOWN = [10, 15, 22, 31, 40, 47, 55]
 
 CENTER_TEXTS = [

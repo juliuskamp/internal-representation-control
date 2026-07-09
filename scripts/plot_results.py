@@ -17,6 +17,8 @@ import torch
 import tyro
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
+from irc.paths import RUNS
+
 # Reference categorical palette (dataviz skill), fixed slot order.
 COND_COLOR = {"think": "#2a78d6", "dont_think": "#eda100", "no_mention": "#1baf7a"}
 COND_LABEL = {"think": "think", "dont_think": "don't think", "no_mention": "no mention"}
@@ -169,7 +171,7 @@ def sae_curves(run_dir: Path, fig_dir: Path) -> None:
 
 
 def main(cfg: Config) -> None:
-    run_dir = Path("artifacts/runs") / cfg.run_id
+    run_dir = RUNS / cfg.run_id
     fig_dir = run_dir / "results" / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
     df = pd.read_parquet(run_dir / "results" / "concept_cosines.parquet")

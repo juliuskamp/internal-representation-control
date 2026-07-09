@@ -25,17 +25,46 @@ import json
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
+import os
+
 import torch
 
-from irc.constants import NLA_LAYER
-from irc.vendor.nla_inference import NLAClient
+from irc.constants import NLA_LAYER, NLA_REPO
+from irc.paths import RUNS
+from irc.vendor.nla_inference import _EMBED_KEY_SUFFIXES, NLAClient
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Everything NLAClient reads except the weight shards: tokenizer, configs,
+# nla_meta.yaml, and the safetensors index (which names the embedding shard).
+_META_PATTERNS = ["*.json", "*.yaml", "tokenizer*", "*.model",
+                  "special_tokens*", "added_tokens*", "chat_template*"]
 
-AV_CHECKPOINT = Path(
-    "/workspace/hf-cache/hub/models--kitft--nla-gemma3-27b-L41-av/snapshots/"
-    "4e721238131ffb8348cff260fe81b8b34a270a0d"
-)
+
+def resolve_checkpoint() -> Path:
+    """Local snapshot dir of the NLA actor checkpoint, via the HF cache.
+
+    Downloads only what NLAClient reads (tokenizer + configs + the one shard
+    holding embed_tokens, ~2 GB) — never the full ~50 GB checkpoint. Prefers
+    the cache (offline-safe); set NLA_AV_CHECKPOINT in .env to point at an
+    existing local snapshot outside HF_HOME instead.
+    """
+    if override := os.environ.get("NLA_AV_CHECKPOINT"):
+        return Path(override)
+    from huggingface_hub import snapshot_download
+
+    def snap(patterns: list[str]) -> Path:
+        try:
+            return Path(snapshot_download(
+                NLA_REPO, allow_patterns=patterns, local_files_only=True))
+        except Exception:
+            return Path(snapshot_download(NLA_REPO, allow_patterns=patterns))
+
+    root = snap(_META_PATTERNS)
+    weight_map = json.loads(
+        (root / "model.safetensors.index.json").read_text())["weight_map"]
+    shards = sorted({f for k, f in weight_map.items()
+                     if k.endswith(_EMBED_KEY_SUFFIXES)})
+    snap(_META_PATTERNS + shards)
+    return root
 
 
 def iter_generations(run_dir: Path, words: list[str] | None, conditions: list[str]):
@@ -87,13 +116,13 @@ def main() -> None:
                          "stopped instead of appending duplicates.")
     args = ap.parse_args()
 
-    run_dir = REPO_ROOT / "artifacts" / "runs" / args.run_id
+    run_dir = RUNS / args.run_id
     out_path = Path(args.out) if args.out else (
         run_dir / "results" / f"nla_explanations_{args.agg}_L{args.layer}.jsonl"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    client = NLAClient(AV_CHECKPOINT, sglang_url=args.sglang_url)
+    client = NLAClient(resolve_checkpoint(), sglang_url=args.sglang_url)
 
     # Resume: collect (key, position) pairs already in the output file so an
     # interrupted run continues instead of appending duplicates. Tolerates a

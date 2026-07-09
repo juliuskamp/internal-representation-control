@@ -27,6 +27,7 @@ from irc.conditions import WORD_FREE_CONDITIONS, build_prompt
 from irc.concept_vectors import _word_token_span, build_vector_bank
 from irc.constants import SAE_ID_TEMPLATE, SAE_RELEASE
 from irc.model import ResidualCapture, chat_ids, get_decoder_layers
+from irc.paths import ARTIFACTS
 from irc.words import WORD_TEMPLATES_V1
 from irc.words_paper import (
     BASELINE_WORDS_PAPER,
@@ -34,8 +35,6 @@ from irc.words_paper import (
     CONTROL_WORDS_PAPER,
     SENTENCES_PAPER,
 )
-
-ARTIFACTS = Path("artifacts")
 
 
 # ---------------------------------------------------------------- vectors ----

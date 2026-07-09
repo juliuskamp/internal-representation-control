@@ -42,10 +42,11 @@ import tyro
 
 from irc.constants import N_LAYERS, NLA_LAYER, SAE_LAYERS
 from irc.constants import VECTOR_VARIANTS as VARIANTS
+from irc.paths import ARTIFACTS, DOCS_DATA, RUNS
 from irc.pipeline import _load_records, _load_saes
 from irc.words_paper import CONTROL_WORDS_PAPER
 
-DATA_DIR = Path("docs/data")
+DATA_DIR = DOCS_DATA
 
 
 def load_nla(run_dir: Path) -> dict:
@@ -111,7 +112,7 @@ def write_gz(path: Path, obj) -> tuple[int, int]:
 
 @torch.no_grad()
 def main(cfg: Config) -> None:
-    run_dir = Path("artifacts/runs") / cfg.run_id
+    run_dir = RUNS / cfg.run_id
     records = _load_records(run_dir)
 
     from transformers import AutoTokenizer
@@ -122,7 +123,7 @@ def main(cfg: Config) -> None:
 
     banks = {}
     for v in VARIANTS:
-        bank = torch.load(Path("artifacts/concept_vectors") / f"bank_{v}_v1.pt")
+        bank = torch.load(ARTIFACTS / "concept_vectors" / f"bank_{v}_v1.pt")
         words = list(bank["vectors"].keys())
         V = torch.stack([bank["vectors"][w] for w in words]).cuda()
         banks[v] = {
@@ -132,7 +133,7 @@ def main(cfg: Config) -> None:
         }
 
     saes = _load_saes(SAE_LAYERS)
-    latents_dir = Path("artifacts/latents_v1")
+    latents_dir = ARTIFACTS / "latents_v1"
     sel_cache: dict[str, dict | None] = {}
 
     nla = load_nla(run_dir)

@@ -17,6 +17,7 @@ from pathlib import Path
 import tyro
 
 from irc import constants, pipeline
+from irc.paths import RUNS
 from irc.words_paper import CONCEPT_WORDS_PAPER
 
 
@@ -35,7 +36,7 @@ class Config:
 
 
 def main(cfg: Config) -> None:
-    run_dir = Path("artifacts/runs") / cfg.run_id
+    run_dir = RUNS / cfg.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     commit = subprocess.run(

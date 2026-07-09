@@ -8,7 +8,9 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+from irc.paths import REPO_ROOT
+
+load_dotenv(REPO_ROOT / ".env")
 
 os.environ.setdefault("HF_HOME", "/workspace/hf-cache")
 

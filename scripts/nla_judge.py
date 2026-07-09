@@ -37,8 +37,8 @@ import httpx
 
 from irc.constants import NLA_LAYER
 from irc.nla_judge_prompt import JUDGE_PROMPT_VERSION, JUDGE_PROMPTS
+from irc.paths import RUNS
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 EVIDENCE_RE = re.compile(r"Evidence:\s*(.*?)\s*$", re.MULTILINE)
@@ -165,7 +165,7 @@ def main() -> None:
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set — add it to .env")
 
-    run_dir = REPO_ROOT / "artifacts" / "runs" / args.run_id
+    run_dir = RUNS / args.run_id
     expl_path = run_dir / "results" / \
         f"nla_explanations_{args.agg}_L{args.layer}.jsonl"
     out_path = Path(args.out) if args.out else (
