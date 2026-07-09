@@ -4,17 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Replication of the "intentional control" experiment from the paper *Emergent Introspective Awareness in Large Language Models* (excerpts in `scratch/`), on `google/gemma-3-27b-it` with Gemma Scope 2 SAEs. The model is told to write a fixed sentence while thinking / not thinking about a concept word; we measure how strongly the concept is internally represented on the response tokens via (a) cosine with mean-difference concept vectors and (b) activation of concept-selective SAE latents. Findings and decisions are logged in `notes/` (`smoke_tests.md`, `run1_results.md`) — read these before changing measurement code.
+Replication of the "intentional control" experiment from the paper *Emergent Introspective Awareness in Large Language Models* (excerpts in `scratch/`), on `google/gemma-3-27b-it` with Gemma Scope 2 SAEs. The model is told to write a fixed sentence while thinking / not thinking about a concept word; we measure how strongly the concept is internally represented on the response tokens via (a) cosine with mean-difference concept vectors and (b) activation of concept-selective SAE latents. Findings and decisions are logged in `notes/` (`smoke_tests.md`, `run1-core_results.md`) — read these before changing measurement code.
 
 ## Commands
 
 Everything runs through `uv` (no test suite or linter is configured):
 
 ```bash
-# Full pipeline (stages are cached/resumable; safe to re-run)
-uv run python scripts/run_pipeline.py --run-id run1
-uv run python scripts/run_pipeline.py --run-id run1 --stages generate measure
-uv run python scripts/run_pipeline.py --run-id run1 --words Dust Oceans --sentences-per-word 5
+# Full pipeline. A "run" is an incrementally grown dataset: re-invoking with
+# the same --run-id extends it (stages are cached/resumable; safe to re-run).
+uv run python scripts/run_pipeline.py --run-id run1-core
+uv run python scripts/run_pipeline.py --run-id run1-core --stages generate measure
+uv run python scripts/run_pipeline.py --run-id run1-core --words Dust Oceans --sentences-per-word 5
 
 # Figures and interactive viewer for a finished run
 uv run python scripts/plot_results.py --run-id run1-core
@@ -49,7 +50,7 @@ Requires a GPU with ~55 GB VRAM (bf16) and `.env` at the repo root with `HF_TOKE
 3. **latents** — per concept word and SAE layer (16/31/40/53): select top-k latents with high mean activation on the word's tokens in templates and near-zero max activation on the 50 experiment sentences (`baseline_max < 0.1 × concept_mean`), cross-checked with Neuronpedia auto-interp labels (cached in `artifacts/neuronpedia_cache.json`). Output: `artifacts/latents_v1/{word}.json`. Word-independent of run_id.
 4. **measure** — model-free; reads stored acts. Concept-vector cosines per layer×token (target word + 100-control-word null) → `results/concept_cosines.parquet`, `token_cosines/`, `null_means/`; selected-latent SAE stats → `results/sae_latents.parquet`.
 
-Run provenance (config, versions, git commit) is written to `artifacts/runs/{run_id}/config.json`.
+Run provenance: every invocation (config, versions, git commit) is appended to `artifacts/runs/{run_id}/invocations.jsonl`; `config.json` is a snapshot of the latest invocation only — the run's data may be the union of many invocations.
 
 **Viewer**: `docs/` is a static site for GitHub Pages (also embeddable via iframe; `?embed=1` hides the page chrome). `docs/index.html` fetches chunked data from `docs/data/` — `index.json` (metadata + word list), `shared-bands.json.gz` (word-independent `no_mention` null bands, deduplicated), `words/{word}.json.gz` (per-word slots, lazy-loaded). `scripts/export_viz_data.py` writes these from a run's stored activations; the data files are committed derived data, so publishing a new run means re-export + commit. fetch() is blocked on `file://` — always view through an HTTP server.
 

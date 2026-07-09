@@ -46,7 +46,7 @@ def main(cfg: Config) -> None:
 
     from irc.model import MODEL_ID
 
-    (run_dir / "config.json").write_text(json.dumps({
+    invocation = {
         **dataclasses.asdict(cfg),
         "model_id": MODEL_ID,
         "sae_release": constants.SAE_RELEASE,
@@ -57,7 +57,13 @@ def main(cfg: Config) -> None:
         "sae_lens": sae_lens.__version__,
         "word_lists": "irc/words_paper.py (baseline deduplicated to 99)",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }, indent=1))
+    }
+    # A run dir is grown incrementally (stages cache/resume), so config.json
+    # only describes the LATEST invocation; the data may be the union of many.
+    # invocations.jsonl keeps the full history.
+    (run_dir / "config.json").write_text(json.dumps(invocation, indent=1))
+    with (run_dir / "invocations.jsonl").open("a") as f:
+        f.write(json.dumps(invocation) + "\n")
 
     words = list(cfg.words) or CONCEPT_WORDS_PAPER
     pairs = pipeline.pair_table(words, cfg.sentences_per_word, cfg.seed)
