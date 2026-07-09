@@ -17,6 +17,7 @@ from irc import env  # noqa: F401
 
 import json
 import random
+import time
 import urllib.request
 from pathlib import Path
 
@@ -203,13 +204,35 @@ def _neuronpedia_label(layer: int, index: int, cache: dict, cache_path: Path) ->
     return label
 
 
-def _load_saes(sae_layers: list[int], device: str = "cuda") -> dict:
+def _load_saes(sae_layers: list[int], device: str = "cuda", total_timeout: float = 300.0) -> dict:
+    """Load the pinned SAEs, retrying on transient network errors.
+
+    sae_lens fetches the safetensors header over HTTP on every load (hardcoded
+    10s timeout) regardless of local cache, so a flaky CDN can kill an otherwise
+    model-free measure. Retry each layer with exponential backoff, bounded by a
+    total wall-clock budget shared across all layers."""
     from sae_lens import SAE
 
     saes = {}
+    deadline = time.monotonic() + total_timeout
     for layer in sae_layers:
-        r = SAE.from_pretrained(SAE_RELEASE, SAE_ID_TEMPLATE.format(layer=layer), device=device)
-        saes[layer] = r[0] if isinstance(r, tuple) else r
+        delay = 2.0
+        while True:
+            try:
+                r = SAE.from_pretrained(
+                    SAE_RELEASE, SAE_ID_TEMPLATE.format(layer=layer), device=device
+                )
+                saes[layer] = r[0] if isinstance(r, tuple) else r
+                break
+            except Exception as e:  # noqa: BLE001 — retry any transient failure
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                wait = min(delay, remaining)
+                print(f"[measure] SAE layer {layer} load failed ({e}); "
+                      f"retrying in {wait:.0f}s ({remaining:.0f}s budget left)")
+                time.sleep(wait)
+                delay = min(delay * 2, 30.0)
     return saes
 
 
