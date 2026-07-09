@@ -28,7 +28,9 @@ import json
 import math
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
@@ -146,6 +148,10 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=200)
     ap.add_argument("--limit", type=int, default=None,
                     help="Max judgments per (target word, condition).")
+    ap.add_argument("--concurrency", type=int, default=8,
+                    help="Number of judge calls in flight at once (I/O-bound; "
+                         "results are order-independent and written as they "
+                         "complete).")
     ap.add_argument("--pilot", action="store_true",
                     help="Judge only the first task, print the full exchange "
                          "(prompt, response, logprob readout), write nothing.")
@@ -213,78 +219,107 @@ def main() -> None:
             per_slot[slot] += 1
             yield row, target
 
-    # Cheap first pass (no network) to size the progress indicator.
-    total = sum(1 for _ in iter_pending())
+    def process_task(row: dict, target: str):
+        """Judge one (row, target). Network-bound; safe to run on a worker
+        thread (httpx.Client is thread-safe). Returns (rec, warnings, debug)
+        where debug = (prompt, text, lp, provider) for --pilot."""
+        prompt = template.format(
+            word=target.lower(),  # concept words are stored Capitalized
+            sentence=sentences[row["sentence_idx"]],
+            explanation=row["explanation"],
+        )
+        text, lp, provider = judge_call(
+            client, args.model, prompt, args.max_tokens)
+
+        scored = score_from_logprobs(lp)
+        text_score = SCORE_RE.search(text)
+        warnings: list[str] = []
+        if scored is None:
+            if text_score:
+                # No score in the logprobs but the text has one — trust it,
+                # just without a logprob-weighted expectation.
+                sampled, expected, dist = int(text_score.group(1)), None, None
+                warnings.append(
+                    f"no integer score token in logprobs for {row['key']} "
+                    f"pos={row['position']} vs {target}; using text score "
+                    f"{text_score.group(1)}")
+            else:
+                # Truncated or off-format with no parseable score: score 0.
+                sampled, expected, dist = 0, 0.0, [[0, 1.0]]
+                warnings.append(
+                    f"no score found for {row['key']} pos={row['position']} "
+                    f"vs {target}; scoring 0")
+        else:
+            sampled, expected, dist = scored
+            if text_score and int(text_score.group(1)) != sampled:
+                warnings.append(f"score token {sampled} != text score "
+                                f"{text_score.group(1)} for {row['key']}")
+
+        rec = {
+            "key": row["key"],
+            "condition": row["condition"],
+            "word": row["word"],
+            "target_word": target,
+            "sentence_idx": row["sentence_idx"],
+            "layer": row["layer"],
+            "position": row["position"],
+            "evidence": parse_evidence(text),
+            "score": sampled,
+            "score_expected": expected,
+            "score_distribution": dist,
+            "judge_model": args.model,
+            "judge_provider": provider,
+            "prompt_version": JUDGE_PROMPT_VERSION,
+            "raw": text,
+        }
+        return rec, warnings, (prompt, text, lp, provider)
+
+    pending = list(iter_pending())
+    total = len(pending)
     if total == 0:
         print("nothing to judge — all explanations already judged (or filtered "
               "out). Bump the prompt version or pass a different --model to redo.")
         return
-    if not args.pilot:
-        print(f"judging {total} explanation(s) with {args.model}")
+
+    if args.pilot:
+        row, target = pending[0]
+        rec, warnings, (prompt, text, lp, provider) = process_task(row, target)
+        for w in warnings:
+            print("  WARNING " + w)
+        print("=== PROMPT ===\n" + prompt)
+        print("\n=== RESPONSE ===\n" + text)
+        print(f"\n=== SCORING (provider: {provider}) ===")
+        print(f"logprob positions returned: {len(lp)}")
+        print(f"sampled score: {rec['score']}   "
+              f"expectation: {rec['score_expected']}")
+        print(f"distribution: {rec['score_distribution']}")
+        return
+
+    print(f"judging {total} explanation(s) with {args.model} "
+          f"(concurrency={args.concurrency})")
 
     n_done = 0
-    out = None if args.pilot else open(out_path, "a")
+    write_lock = threading.Lock()
+    out = open(out_path, "a")
     try:
-        for row, target in iter_pending():
-            prompt = template.format(
-                word=target.lower(),  # concept words are stored Capitalized
-                sentence=sentences[row["sentence_idx"]],
-                explanation=row["explanation"],
-            )
-            text, lp, provider = judge_call(
-                client, args.model, prompt, args.max_tokens)
-
-            scored = score_from_logprobs(lp)
-            text_score = SCORE_RE.search(text)
-            if scored is None:
-                print(f"  WARNING no integer score token found for "
-                      f"{row['key']} pos={row['position']} vs {target}; "
-                      f"text score: {text_score and text_score.group(1)}")
-                sampled, expected, dist = (
-                    int(text_score.group(1)) if text_score else None, None, None)
-            else:
-                sampled, expected, dist = scored
-                if text_score and int(text_score.group(1)) != sampled:
-                    print(f"  WARNING score token {sampled} != text score "
-                          f"{text_score.group(1)} for {row['key']}")
-
-            rec = {
-                "key": row["key"],
-                "condition": row["condition"],
-                "word": row["word"],
-                "target_word": target,
-                "sentence_idx": row["sentence_idx"],
-                "layer": row["layer"],
-                "position": row["position"],
-                "evidence": parse_evidence(text),
-                "score": sampled,
-                "score_expected": expected,
-                "score_distribution": dist,
-                "judge_model": args.model,
-                "judge_provider": provider,
-                "prompt_version": JUDGE_PROMPT_VERSION,
-                "raw": text,
-            }
-
-            if args.pilot:
-                print("=== PROMPT ===\n" + prompt)
-                print("\n=== RESPONSE ===\n" + text)
-                print(f"\n=== SCORING (provider: {provider}) ===")
-                print(f"logprob positions returned: {len(lp)}")
-                print(f"sampled score: {sampled}   expectation: {expected}")
-                print(f"distribution: {dist}")
-                return
-
-            out.write(json.dumps(rec) + "\n")
-            out.flush()
-            n_done += 1
-            exp_str = f"{expected:.1f}" if expected is not None else "?"
-            print(f"[{n_done}/{total} {100 * n_done // total}%] "
-                  f"{row['key']} pos={row['position']} vs "
-                  f"{target}: {sampled} (E={exp_str})")
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            futures = [pool.submit(process_task, row, target)
+                       for row, target in pending]
+            for fut in as_completed(futures):
+                rec, warnings, _ = fut.result()
+                with write_lock:
+                    for w in warnings:
+                        print("  WARNING " + w)
+                    out.write(json.dumps(rec) + "\n")
+                    out.flush()
+                    n_done += 1
+                    expected = rec["score_expected"]
+                    exp_str = f"{expected:.1f}" if expected is not None else "?"
+                    print(f"[{n_done}/{total} {100 * n_done // total}%] "
+                          f"{rec['key']} pos={rec['position']} vs "
+                          f"{rec['target_word']}: {rec['score']} (E={exp_str})")
     finally:
-        if out is not None:
-            out.close()
+        out.close()
 
     print(f"\nwrote {n_done} judgments to {out_path}")
 
