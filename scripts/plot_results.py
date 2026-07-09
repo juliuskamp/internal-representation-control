@@ -19,7 +19,8 @@ from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
 from irc.paths import RUNS
 
-# Reference categorical palette (dataviz skill), fixed slot order.
+# Reference categorical palette (dataviz skill), fixed slot order. Mirrors the
+# viewer's --think/--dont/--nomen light-mode values (docs/index.html).
 COND_COLOR = {"think": "#2a78d6", "dont_think": "#eda100", "no_mention": "#1baf7a"}
 COND_LABEL = {"think": "think", "dont_think": "don't think", "no_mention": "no mention"}
 NULL_GRAY = "#b9b7b0"

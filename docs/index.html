@@ -10,32 +10,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Internal representation viewer — Gemma 3 27B</title>
 <style>
+/* Single palette definition: light-dark() picks per color-scheme. Default
+   follows the OS; a host page forces a theme by stamping data-theme on
+   <html> (observed in JS to re-render the canvases). The condition colors
+   (--think/--dont/--nomen) are mirrored in scripts/plot_results.py. */
 :root {
-  --surface: #fbfbf9; --surface-2: #f1f0ec; --ink: #171614; --ink-2: #55534d;
-  --line: #e2e1db; --accent: #2a78d6;
-  --think: #2a78d6; --dont: #eda100; --nomen: #1baf7a; --null: #b9b7b0;
-  --chip-bad-bg: #fbeaea; --chip-bad-ink: #9c2a29;
+  color-scheme: light dark;
+  --surface:      light-dark(#fbfbf9, #1a1a19);
+  --surface-2:    light-dark(#f1f0ec, #242422);
+  --ink:          light-dark(#171614, #f2f1ec);
+  --ink-2:        light-dark(#55534d, #c3c2b7);
+  --line:         light-dark(#e2e1db, #35342f);
+  --accent:       light-dark(#2a78d6, #3987e5);
+  --think:        light-dark(#2a78d6, #3987e5);
+  --dont:         light-dark(#eda100, #c98500);
+  --nomen:        light-dark(#1baf7a, #199e70);
+  --null:         light-dark(#b9b7b0, #55534d);
+  --chip-bad-bg:  light-dark(#fbeaea, #3a2323);
+  --chip-bad-ink: light-dark(#9c2a29, #e8908f);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface: #1a1a19; --surface-2: #242422; --ink: #f2f1ec; --ink-2: #c3c2b7;
-    --line: #35342f; --accent: #3987e5;
-    --think: #3987e5; --dont: #c98500; --nomen: #199e70; --null: #55534d;
-    --chip-bad-bg: #3a2323; --chip-bad-ink: #e8908f;
-  }
-}
-:root[data-theme="light"] {
-  --surface: #fbfbf9; --surface-2: #f1f0ec; --ink: #171614; --ink-2: #55534d;
-  --line: #e2e1db; --accent: #2a78d6;
-  --think: #2a78d6; --dont: #eda100; --nomen: #1baf7a; --null: #b9b7b0;
-  --chip-bad-bg: #fbeaea; --chip-bad-ink: #9c2a29;
-}
-:root[data-theme="dark"] {
-  --surface: #1a1a19; --surface-2: #242422; --ink: #f2f1ec; --ink-2: #c3c2b7;
-  --line: #35342f; --accent: #3987e5;
-  --think: #3987e5; --dont: #c98500; --nomen: #199e70; --null: #55534d;
-  --chip-bad-bg: #3a2323; --chip-bad-ink: #e8908f;
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--surface); color: var(--ink);
