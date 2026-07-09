@@ -133,8 +133,15 @@ svg .zero { stroke: var(--ink-2); stroke-width: 1; }
 .nla-row .badge {
   display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent);
   border: 1px solid var(--accent); border-radius: 999px; padding: 0 8px; margin-left: 8px;
-  vertical-align: 1px;
+  vertical-align: 1px; font-variant-numeric: tabular-nums;
 }
+.nla-row .badge.zero { color: var(--ink-2); border-color: var(--line); }
+.nla-row mark.ev-hl {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit; border-radius: 3px; padding: 0 2px;
+}
+.nla-row .ev-miss { color: var(--ink-2); font-size: 12px; margin-top: 3px; }
+.nla-row .ev-miss q { color: var(--ink); }
 .tablebox { margin-top: 22px; }
 .tablebox button {
   font: inherit; color: var(--accent); background: none; border: none;
@@ -168,7 +175,7 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
         <option value="word_tokens">Concept vector — word tokens</option>
         <option value="paper">Concept vector — paper method</option>
         <option value="sae">SAE latents (top-5)</option>
-        <option value="nla">NLA explanation — word mentioned</option>
+        <option value="nla">NLA explanation — judge score</option>
       </select></div>
     <div class="ctl" id="aggctl" hidden><label for="agg">Latent aggregation</label>
       <select id="agg">
@@ -206,7 +213,8 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <h2>NLA explanations per token</h2>
     <p class="nlanote" id="nlanote" hidden>No NLA explanations exported for this
     word/sentence. Generate them with
-    <code>uv run python scripts/nla_explain.py --run-id … --agg token</code>
+    <code>uv run python scripts/nla_explain.py --run-id … --agg token</code>,
+    judge them with <code>uv run python scripts/nla_judge.py --run-id …</code>
     and re-run <code>scripts/export_viz_data.py</code>.</p>
     <div id="nlalist"></div>
   </section>
@@ -307,8 +315,12 @@ function activeLayer() {
   return ls.reduce((a, b) => Math.abs(b - state.saeLayer) < Math.abs(a - state.saeLayer) ? b : a);
 }
 
-// value formatting per measurement (tooltip + table)
-function fmtVal(v) { return isSAE() ? v.toFixed(1) : isNLA() ? (v ? "yes" : "no") : v.toFixed(3); }
+// value formatting per measurement (tooltip + table); NLA scores can be null
+// on tokens that haven't been judged yet.
+function fmtVal(v) {
+  if (v == null) return "—";
+  return isSAE() ? v.toFixed(1) : isNLA() ? v.toFixed(1) : v.toFixed(3);
+}
 
 const latentKey = (layer, latent) => `${state.word}|${layer}|${latent}`;
 
@@ -346,7 +358,7 @@ function seriesData() {
     let vals = null, band = null;
     if (rec.exact) {
       if (isNLA()) {
-        vals = rec.nla ? rec.nla.mention : null;
+        vals = rec.nla && rec.nla.score.some((s) => s != null) ? rec.nla.score : null;
       } else if (isSAE()) {
         const li = INDEX.sae_layers.indexOf(L);
         const rows = rec.sae ? rec.sae[li] : null;
@@ -409,7 +421,9 @@ function render() {
   $("meta").textContent =
     `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
     (isNLA()
-      ? `NLA: kitft/nla-gemma3-27b-L41-av (greedy) on layer ${activeLayer()} resid_post — 1 if the explanation contains “${state.word.toLowerCase()}” (whole word, any case)`
+      ? `NLA: kitft/nla-gemma3-27b-L41-av (greedy) on layer ${activeLayer()} resid_post — ` +
+        `${INDEX.nla_judge ? INDEX.nla_judge.model + ` (prompt ${INDEX.nla_judge.prompt_version})` : "LLM"} judge, ` +
+        `0–100 logit-expectation score for “${state.word.toLowerCase()}” in the explanation`
       : isSAE()
       ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents`
       : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
@@ -438,17 +452,15 @@ function drawChart(tokens, conds) {
   };
   svg.innerHTML = "";
 
-  // y grid + ticks (binary NLA metric: just the two meaningful lines)
+  // y grid + ticks
   const ticks = 5;
   const tickVals = [];
-  if (isNLA()) tickVals.push(0, 1);
-  else for (let i = 0; i <= ticks; i++) tickVals.push(lo + ((hi - lo) * i) / ticks);
+  for (let i = 0; i <= ticks; i++) tickVals.push(lo + ((hi - lo) * i) / ticks);
   for (const v of tickVals) {
     const yy = y(v);
     svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "grid" }));
     const t = el("text", { x: m.l - 8, y: yy + 4, "text-anchor": "end", "font-size": 11 });
-    t.textContent = isNLA() ? (v ? "1 (yes)" : "0 (no)")
-      : Math.abs(hi - lo) < 5 ? v.toFixed(2) : v.toFixed(0);
+    t.textContent = Math.abs(hi - lo) < 5 ? v.toFixed(2) : v.toFixed(0);
     svg.appendChild(t);
   }
   if (lo < 0 && hi > 0) {
@@ -458,7 +470,7 @@ function drawChart(tokens, conds) {
   const yl = el("text", { x: 14, y: m.t + ih / 2, "font-size": 11.5,
     transform: `rotate(-90 14 ${m.t + ih / 2})`, "text-anchor": "middle" });
   yl.textContent = isNLA()
-    ? "word mentioned in NLA explanation (0/1)"
+    ? "judge score — concept in NLA explanation (0–100)"
     : isSAE()
     ? `selected-latent activation (${state.saeAgg === "mean" ? "average" : state.saeAgg})`
     : "cosine with concept vector";
@@ -489,18 +501,25 @@ function drawChart(tokens, conds) {
   for (const c of conds) {
     if (!c.vals) continue;
     const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
-    let d = "";
-    c.vals.forEach((v, i) => { d += `${i ? "L" : "M"}${x(i)},${y(v)}`; });
+    let d = "", pen = false;  // null values (unjudged NLA tokens) leave gaps
+    c.vals.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      d += `${pen ? "L" : "M"}${x(i)},${y(v)}`;
+      pen = true;
+    });
     svg.appendChild(el("path", {
       d, fill: "none", stroke: color, "stroke-width": 2,
       "stroke-dasharray": c.isBaseCond ? "5 4" : "none",
       "stroke-linejoin": "round", "stroke-linecap": "round",
     }));
     c.vals.forEach((v, i) => {
+      if (v == null) return;
       svg.appendChild(el("circle", { cx: x(i), cy: y(v), r: 3, fill: color }));
     });
-    // direct label at line end
-    let ly = y(c.vals[n - 1]) + 4;
+    // direct label at line end (last non-null point)
+    const lastV = c.vals.reduce((a, v) => (v == null ? a : v), null);
+    if (lastV == null) continue;
+    let ly = y(lastV) + 4;
     while (labelYs.some((p) => Math.abs(p - ly) < 14)) ly += 14;
     labelYs.push(ly);
     const t = el("text", {
@@ -575,8 +594,9 @@ function renderLatents(slot) {
 }
 
 // Collapsed-by-default per-condition sections with the raw NLA explanation
-// per token; shown only while the NLA measurement is selected. Rows whose
-// explanation contains the word verbatim are highlighted.
+// per token; shown only while the NLA measurement is selected. Each row shows
+// the judge score as a badge; the judge's evidence quote is highlighted
+// inside the explanation text (rows scoring ≥ 50 get the accent border).
 function renderNLA(slot) {
   const box = $("nlabox");
   if (!isNLA()) { box.hidden = true; return; }
@@ -592,25 +612,56 @@ function renderNLA(slot) {
     const sum = document.createElement("summary");
     sum.style.color = cssv(c.cssVar);
     sum.textContent = c.label;
-    const hits = rec.nla.mention.reduce((a, b) => a + b, 0);
+    const scores = rec.nla.score.filter((s) => s != null);
     const cnt = document.createElement("span");
     cnt.className = "cnt";
-    cnt.textContent = ` — ${rec.nla.explanations.length} tokens, ${hits} mention${hits === 1 ? "" : "s"}`;
+    cnt.textContent = ` — ${rec.nla.explanations.length} tokens, ` + (scores.length
+      ? `mean judge score ${(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1)}`
+      : "not judged");
     sum.appendChild(cnt);
     det.appendChild(sum);
     slot.tokens.forEach((tok, i) => {
+      const score = rec.nla.score[i], evidence = rec.nla.evidence[i];
       const row = document.createElement("div");
-      row.className = "nla-row" + (rec.nla.mention[i] ? " hit" : "");
+      row.className = "nla-row" + (score >= 50 ? " hit" : "");
       const code = document.createElement("code");
       code.textContent = `“${tok}”`;
-      if (rec.nla.mention[i]) {
+      if (score != null) {
         const b = document.createElement("span");
-        b.className = "badge"; b.textContent = "mention";
+        b.className = "badge" + (score < 50 ? " zero" : "");
+        b.textContent = score.toFixed(0);
+        b.title = "judge score (0–100)";
         code.appendChild(b);
       }
       const ex = document.createElement("div");
       ex.className = "ex";
-      ex.textContent = rec.nla.explanations[i] || "(no explanation)";
+      const txt = rec.nla.explanations[i] || "(no explanation)";
+      // highlight the judge's evidence quote inside the explanation; fall
+      // back to a separate line if the quote isn't a verbatim substring
+      let at = -1;
+      if (evidence) {
+        at = txt.indexOf(evidence);
+        if (at < 0) at = txt.toLowerCase().indexOf(evidence.toLowerCase());
+      }
+      if (at >= 0) {
+        ex.append(txt.slice(0, at));
+        const mk = document.createElement("mark");
+        mk.className = "ev-hl";
+        mk.textContent = txt.slice(at, at + evidence.length);
+        ex.appendChild(mk);
+        ex.append(txt.slice(at + evidence.length));
+      } else {
+        ex.textContent = txt;
+        if (evidence) {
+          const miss = document.createElement("div");
+          miss.className = "ev-miss";
+          const q = document.createElement("q");
+          q.textContent = evidence;
+          miss.append("judge evidence: ");
+          miss.appendChild(q);
+          ex.appendChild(miss);
+        }
+      }
       row.appendChild(code); row.appendChild(ex);
       det.appendChild(row);
     });

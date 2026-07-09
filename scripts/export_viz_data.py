@@ -11,11 +11,12 @@ For every stored (word, sentence, condition) run of a pipeline run:
     toggling happen client-side in the viewer)
   - NLA explanations per token (layer 41), when results/nla_explanations_
     token_L41.jsonl exists in the run dir (written by scripts/nla_explain.py
-    --agg token): the explanation text plus a binary per-token flag for
-    whether the target word appears verbatim (case-insensitive, whole word)
-    in the explanation. no_mention explanations are word-independent; they
-    are attached (and the flag recomputed) per word, but only for words that
-    have their own NLA rows on that sentence.
+    --agg token): the explanation text plus the LLM-judge score (0-100 logit
+    expectation, from results/nla_judgments_token_L41.jsonl, written by
+    scripts/nla_judge.py) and the judge's evidence quote per token.
+    no_mention explanations are word-independent; they are attached (with
+    that word's judgments) per word, but only for words that have their own
+    NLA rows on that sentence. Tokens without a judgment get null scores.
 All series are trimmed to the sentence's own tokens (the model sometimes emits a
 trailing whitespace token before <end_of_turn>; verified to be the only length
 mismatch, and responses always begin directly with the sentence tokens).
@@ -34,7 +35,6 @@ from irc import env  # noqa: F401
 import dataclasses
 import gzip
 import json
-import re
 from pathlib import Path
 
 import torch
@@ -64,13 +64,34 @@ def load_nla(run_dir: Path) -> dict:
     return out
 
 
-def nla_entry(expl_by_pos: dict, word: str, n_tokens: int) -> dict:
-    """Trim to sentence tokens; flag verbatim whole-word mentions of `word`."""
-    expl = [expl_by_pos.get(t, "") for t in range(n_tokens)]
-    pat = re.compile(rf"\b{re.escape(word.lower())}\b", re.IGNORECASE)
+def load_judgments(run_dir: Path) -> dict:
+    """(condition, word|None, sentence_idx, target_word) -> {token_pos: row}."""
+    path = run_dir / "results" / f"nla_judgments_token_L{NLA_LAYER}.jsonl"
+    out: dict = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        r = json.loads(line)
+        if r["layer"] != NLA_LAYER or not isinstance(r["position"], int):
+            continue
+        out.setdefault(
+            (r["condition"], r["word"], r["sentence_idx"], r["target_word"]), {}
+        )[r["position"]] = r
+    return out
+
+
+def nla_entry(expl_by_pos: dict, judg_by_pos: dict, n_tokens: int) -> dict:
+    """Trim to sentence tokens; attach judge score (0-100 logit expectation)
+    and evidence quote per token (null where unjudged)."""
+    judg = [judg_by_pos.get(t) for t in range(n_tokens)]
     return {
-        "explanations": expl,
-        "mention": [int(bool(pat.search(e))) for e in expl],
+        "explanations": [expl_by_pos.get(t, "") for t in range(n_tokens)],
+        "score": [
+            None if j is None or j["score_expected"] is None
+            else round(j["score_expected"], 1)
+            for j in judg
+        ],
+        "evidence": [j["evidence"] if j else None for j in judg],
     }
 
 
@@ -116,9 +137,15 @@ def main(cfg: Config) -> None:
     sel_cache: dict[str, dict | None] = {}
 
     nla = load_nla(run_dir)
+    judgments = load_judgments(run_dir)
     # (word, si) pairs with their own NLA rows — gates attaching the shared
     # no_mention explanations so they aren't duplicated into all 50 words.
     nla_worded = {(w, si) for (_, w, si) in nla if w is not None}
+    judge_meta = None
+    if judgments:
+        any_row = next(iter(next(iter(judgments.values())).values()))
+        judge_meta = {"model": any_row["judge_model"],
+                      "prompt_version": any_row["prompt_version"]}
 
     def sel_for(word: str) -> dict | None:
         if word not in sel_cache:
@@ -169,7 +196,9 @@ def main(cfg: Config) -> None:
             entry: dict = {"exact": rec["exact_match"], "completion": rec["completion"]}
             expl_by_pos = nla.get((rec["condition"], rec["word"], rec["sentence_idx"]))
             if expl_by_pos and (word, rec["sentence_idx"]) in nla_worded:
-                entry["nla"] = nla_entry(expl_by_pos, word, len(toks))
+                judg_by_pos = judgments.get(
+                    (rec["condition"], rec["word"], rec["sentence_idx"], word), {})
+                entry["nla"] = nla_entry(expl_by_pos, judg_by_pos, len(toks))
             if cos_v is not None:
                 for v in VARIANTS:
                     e = {"target": rnd(cos_v[v][:, banks[v]["w_idx"][word]].cpu())}
@@ -211,6 +240,7 @@ def main(cfg: Config) -> None:
         "n_layers": 62,
         "variants": list(VARIANTS),
         "nla_layer": NLA_LAYER,
+        "nla_judge": judge_meta,
         "words": sorted(data),
     }, indent=1))
     print(f"{len(data)} word chunks + shared bands: "

@@ -12,6 +12,10 @@
   "word_tokens"
  ],
  "nla_layer": 41,
+ "nla_judge": {
+  "model": "openai/gpt-4.1",
+  "prompt_version": "v1"
+ },
  "words": [
   "Algorithms",
   "Amphitheaters",
