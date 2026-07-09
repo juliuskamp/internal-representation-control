@@ -234,6 +234,24 @@ def main(cfg: Config) -> None:
         total_raw += r; total_gz += g
     r, g = write_gz(DATA_DIR / "shared-bands.json.gz", shared)
     total_raw += r; total_gz += g
+
+    # Per (word, sentence) exactness, for greying out dropdown options that
+    # have no usable data: "exact" means both word-conditioned generations
+    # (think, dont_think) hit the target sentence exactly. no_mention is
+    # word-independent so it's excluded from this check. Encoded as one
+    # bitstring per word, aligned to the shared sentence_order list (every
+    # word has the same sentence set).
+    sentence_order = sorted({si for sis in data.values() for si in sis}, key=int)
+    exact_by_word = {}
+    for word, sis in data.items():
+        bits = []
+        for si in sentence_order:
+            slot = sis.get(si)
+            conds = slot["conditions"] if slot else {}
+            ok = all((conds.get(c) or {}).get("exact") for c in ("think", "dont_think"))
+            bits.append("1" if ok else "0")
+        exact_by_word[word] = "".join(bits)
+
     (DATA_DIR / "index.json").write_text(json.dumps({
         "run_id": cfg.run_id,
         "sae_layers": SAE_LAYERS,
@@ -242,6 +260,8 @@ def main(cfg: Config) -> None:
         "nla_layer": NLA_LAYER,
         "nla_judge": judge_meta,
         "words": sorted(data),
+        "sentence_order": sentence_order,
+        "exact": exact_by_word,
     }, indent=1))
     print(f"{len(data)} word chunks + shared bands: "
           f"json {total_raw / 1e6:.1f} MB -> gzip {total_gz / 1e6:.1f} MB in {DATA_DIR}")

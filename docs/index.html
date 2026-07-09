@@ -66,6 +66,7 @@ select {
   border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
   max-width: 320px;
 }
+select option.inexact { color: var(--ink-2); font-style: italic; }
 select:focus-visible, input:focus-visible, button:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
@@ -227,6 +228,12 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
   <footer id="meta"></footer>
 </div>
 
+
+<!-- URL query params: current selection is mirrored to word=, sent=, meas=,
+     base=, layer=, agg=, table=1 (via syncURL(), replaceState so it doesn't
+     spam history) — copy the URL bar to share the exact view. Separately,
+     only_word=, only_sent=, only_meas=, only_base= (comma-separated) narrow
+     which options are offered at all, for sharing a subset of the data. -->
 <script>
 if (new URLSearchParams(location.search).has("embed")) {
   document.documentElement.classList.add("embed");
@@ -240,10 +247,51 @@ const COND = [
 const $ = (id) => document.getElementById(id);
 const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
-let INDEX = null, SHARED = null;
+let INDEX = null, SHARED = null, SI_INDEX = null;
 const CHUNKS = {};  // word -> {word, slots}
 const state = { word: null, si: null, meas: "word_tokens", base: "band", layer: 40, saeLayer: 40,
   saeAgg: "sum", latentOff: new Set() };  // latentOff keys: "word|layer|latent"
+
+// URL query params, split into two purposes:
+//  - restrict.* narrows which options are offered at all (for sharing a
+//    subset of words/sentences/measurements/baselines)
+//  - the rest (word, sent, meas, base, layer, agg, table) are the current
+//    selection, kept in sync with the URL bar via syncURL() below so a
+//    copied link reproduces the exact same view.
+const QP = new URLSearchParams(location.search);
+function parseListParam(name) {
+  const v = QP.get(name);
+  if (!v) return null;
+  const s = new Set(v.split(",").map((x) => x.trim()).filter(Boolean));
+  return s.size ? s : null;
+}
+const restrict = {
+  words: parseListParam("only_word"),
+  sentences: parseListParam("only_sent"),
+  meas: parseListParam("only_meas"),
+  base: parseListParam("only_base"),
+};
+
+function isExact(word, si) {
+  const bits = INDEX.exact && INDEX.exact[word];
+  if (!bits || !SI_INDEX) return true;  // no data to judge by: don't grey out
+  const idx = SI_INDEX[si];
+  return idx == null ? true : bits[idx] === "1";
+}
+
+// Reflect current selection in the URL (replaceState: no history spam from
+// slider drags), preserving any restrict.* params already present.
+function syncURL() {
+  const p = new URLSearchParams(location.search);
+  p.set("word", state.word);
+  p.set("sent", state.si);
+  p.set("meas", state.meas);
+  p.set("base", state.base);
+  p.set("layer", String(isSAE() ? state.saeLayer : isNLA() ? INDEX.nla_layer : state.layer));
+  if (isSAE()) p.set("agg", state.saeAgg); else p.delete("agg");
+  if (!$("tablewrap").hidden) p.set("table", "1"); else p.delete("table");
+  history.replaceState(null, "", `${location.pathname}?${p.toString()}${location.hash}`);
+}
 
 function setStatus(msg, isErr = false) {
   const s = $("status");
@@ -298,9 +346,27 @@ function fillSelect(sel, opts, value) {
   for (const o of opts) {
     const el = document.createElement("option");
     el.value = o.value; el.textContent = o.label;
+    el.dataset.label = o.label;
     sel.appendChild(el);
   }
   sel.value = value;
+}
+
+// Grey out (but keep selectable) sentence options with no exact completion
+// for the current word, and word options with no exact completion for the
+// current sentence. The "excluded" chip already explains the *current*
+// selection; this is a heads-up about the *other* options.
+function applyExactStyling() {
+  for (const opt of $("sent").options) {
+    const exact = isExact(state.word, opt.value);
+    opt.classList.toggle("inexact", !exact);
+    opt.textContent = opt.dataset.label + (exact ? "" : "  ✕");
+  }
+  for (const opt of $("word").options) {
+    const exact = isExact(opt.value, state.si);
+    opt.classList.toggle("inexact", !exact);
+    opt.textContent = opt.dataset.label + (exact ? "" : " ✕");
+  }
 }
 
 function currentSlot() { return CHUNKS[state.word].slots[state.si]; }
@@ -418,6 +484,8 @@ function render() {
   renderLatents(slot);
   renderNLA(slot);
   renderTable(tokens, conds);
+  applyExactStyling();
+  syncURL();
   $("meta").textContent =
     `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
     (isNLA()
@@ -707,25 +775,90 @@ function syncControls() {
     $("layerval").textContent = state.layer;
   }
   const baseSel = $("base");
-  baseSel.querySelector('option[value="band"]').disabled = isSAE() || isNLA();
-  if ((isSAE() || isNLA()) && state.base === "band") { state.base = "nomen"; baseSel.value = "nomen"; }
+  const bandOpt = baseSel.querySelector('option[value="band"]');
+  const bandRestricted = !!(restrict.base && !restrict.base.has("band"));
+  bandOpt.disabled = isSAE() || isNLA() || bandRestricted;
+  bandOpt.hidden = bandRestricted;
+  if ((isSAE() || isNLA()) && state.base === "band") {
+    const pref = ["nomen", "none"].filter((v) => !restrict.base || restrict.base.has(v));
+    state.base = pref[0] || "none";
+    baseSel.value = state.base;
+  }
   $("aggctl").hidden = !isSAE();
 }
 
 function syncSentences() {
-  const sis = Object.keys(CHUNKS[state.word].slots);
+  let sis = Object.keys(CHUNKS[state.word].slots);
+  if (restrict.sentences) {
+    const filtered = sis.filter((si) => restrict.sentences.has(si));
+    if (filtered.length) sis = filtered;
+  }
   if (!sis.includes(state.si)) state.si = sis[0];
   fillSelect($("sent"), sis.map((si) => ({
     value: si, label: `s${si.padStart(2, "0")} — ${CHUNKS[state.word].slots[si].sentence}`,
   })), state.si);
 }
 
+// Hide/disable <option>s not in `allowed` (a Set of values); no-op if
+// `allowed` is null, and self-reverting if it would hide every option (a
+// restrict param that matches nothing real shouldn't brick the control).
+function restrictOptions(sel, allowed) {
+  if (!allowed) return;
+  let anyVisible = false;
+  for (const opt of sel.options) {
+    const ok = allowed.has(opt.value);
+    opt.hidden = !ok; opt.disabled = !ok;
+    if (ok) anyVisible = true;
+  }
+  if (!anyVisible) for (const opt of sel.options) { opt.hidden = false; opt.disabled = false; }
+}
+
 async function init() {
-  const words = INDEX.words;
-  state.word = words[0];
+  SI_INDEX = Object.fromEntries((INDEX.sentence_order || []).map((s, i) => [s, i]));
+
+  restrictOptions($("meas"), restrict.meas);
+  restrictOptions($("base"), restrict.base);
+
+  let words = INDEX.words;
+  if (restrict.words) {
+    const filtered = words.filter((w) => restrict.words.has(w));
+    if (filtered.length) words = filtered;
+  }
+  const urlWord = QP.get("word");
+  state.word = (urlWord && words.includes(urlWord)) ? urlWord : words[0];
   fillSelect($("word"), words.map((w) => ({ value: w, label: w })), state.word);
+
+  const measAllowed = [...$("meas").options].filter((o) => !o.hidden).map((o) => o.value);
+  const urlMeas = QP.get("meas");
+  state.meas = (urlMeas && measAllowed.includes(urlMeas)) ? urlMeas
+    : measAllowed.includes(state.meas) ? state.meas : measAllowed[0];
+  $("meas").value = state.meas;
+
+  const baseAllowed = [...$("base").options].filter((o) => !o.hidden).map((o) => o.value);
+  const urlBase = QP.get("base");
+  state.base = (urlBase && baseAllowed.includes(urlBase)) ? urlBase
+    : baseAllowed.includes(state.base) ? state.base : baseAllowed[0];
+  $("base").value = state.base;
+
+  const urlLayer = QP.get("layer");
+  if (urlLayer != null && !isNaN(+urlLayer)) {
+    const L = Math.max(0, Math.min(INDEX.n_layers - 1, +urlLayer));
+    if (isSAE()) state.saeLayer = L; else state.layer = L;
+  }
+  const urlAgg = QP.get("agg");
+  if (urlAgg && ["sum", "mean", "max"].includes(urlAgg)) { state.saeAgg = urlAgg; $("agg").value = urlAgg; }
+
+  const urlSent = QP.get("sent");
+  if (urlSent != null) state.si = urlSent;
+
   await ensureWord(state.word);
   syncSentences();
+
+  if (QP.get("table") === "1") {
+    $("tablewrap").hidden = false;
+    $("tablebtn").textContent = "Hide table";
+    $("tablebtn").setAttribute("aria-expanded", "true");
+  }
 
   $("word").addEventListener("change", async (e) => {
     const w = e.target.value;
