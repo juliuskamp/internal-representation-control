@@ -15,7 +15,6 @@ dependencies = [
     "pyyaml>=6.0.3",
     "sae-lens>=6.45.3",
     "torch>=2.12.1",
-    "transformer-lens>=3.5.1",
     "transformers>=5.13.0",
     "tyro>=1.0.15",
 ]

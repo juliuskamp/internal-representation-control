@@ -283,7 +283,7 @@ def select_latents(
                 baseline_max[l] = m if baseline_max[l] is None else torch.maximum(baseline_max[l], m)
         torch.save(baseline_max, base_path)
 
-    templates = ["Tell me about {word}."] + WORD_TEMPLATES_V1[1:]
+    templates = WORD_TEMPLATES_V1  # [0] is "Tell me about {word}."
     for wi, word in enumerate(words):
         path = out_dir / f"{word}.json"
         if path.exists():

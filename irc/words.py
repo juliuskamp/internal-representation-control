@@ -38,12 +38,6 @@ RANDOM_WORDS_V1: list[str] = [
     "ocean",
 ]
 
-CONCEPT_TEMPLATES_V1: list[str] = [
-    "Tell me about {word}.",
-    "Describe {word}.",
-    "What is {word}?",
-]
-
 # Templates where the word sits mid-sentence in varied contexts; activations are
 # taken at the word's own tokens ("word_tokens" extraction variant).
 WORD_TEMPLATES_V1: list[str] = [

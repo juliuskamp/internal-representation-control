@@ -1,9 +1,11 @@
-"""Concept vectors via the mean-difference method (paper-faithful).
+"""Concept vectors via the mean-difference method.
 
 For a concept word w: vector(layer) = mean_act(prompts about w) - mean_act(prompts
-about random words). Two position variants are computed in the same pass:
-  - "last_prompt": activation at the final prompt token (end of chat template).
-  - "response_mean": mean activation over greedily generated response tokens.
+about random words). Two extraction variants (see build_vector_bank):
+  - "paper": activation at the last prompt token of "Tell me about {word}."
+    (paper appendix 12.1.1; failed sanity checks on Gemma — kept for comparison).
+  - "word_tokens": mean activation at the word's own token positions across
+    sentence templates (the working method; see notes/smoke_tests.md).
 """
 
 from irc import env  # noqa: F401
@@ -11,28 +13,6 @@ from irc import env  # noqa: F401
 import torch
 
 from irc.model import ResidualCapture, chat_ids, get_decoder_layers
-
-POSITION_VARIANTS = ("last_prompt", "response_mean")
-
-
-@torch.no_grad()
-def prompt_activations(
-    model,
-    tokenizer,
-    user_message: str,
-    layers: list[int],
-    max_new_tokens: int = 32,
-) -> dict[str, torch.Tensor]:
-    """Run one prompt, return {variant: (n_layers, d_model)} fp32 cpu tensors."""
-    ids = chat_ids(tokenizer, user_message)
-    n_prompt = ids.shape[1]
-    out = model.generate(ids, max_new_tokens=max_new_tokens, do_sample=False)
-    with ResidualCapture(model, layers) as cap:
-        model(out)
-    last_prompt = torch.stack([cap.acts[i][0, n_prompt - 1] for i in layers])
-    response_mean = torch.stack([cap.acts[i][0, n_prompt:].mean(dim=0) for i in layers])
-    return {"last_prompt": last_prompt, "response_mean": response_mean}
-
 
 # Paper-faithful extraction (appendix 12.1.1): activations at the final prompt
 # token of "Tell me about {word}." (word lowercase) — for Gemma's chat template
@@ -153,39 +133,3 @@ def concept_vector_word_tokens(
     concept_acts = word_mean(concept)
     baseline = torch.stack([word_mean(w) for w in random_words]).mean(dim=0)
     return concept_acts - baseline
-
-
-@torch.no_grad()
-def concept_vector(
-    model,
-    tokenizer,
-    concept: str,
-    random_words: list[str],
-    templates: list[str],
-    layers: list[int] | None = None,
-    max_new_tokens: int = 32,
-) -> dict[str, torch.Tensor]:
-    """Return {variant: (n_layers, d_model)} concept vectors (all layers if None)."""
-    if layers is None:
-        layers = list(range(len(get_decoder_layers(model))))
-
-    def word_mean(word: str) -> dict[str, torch.Tensor]:
-        per_template = [
-            prompt_activations(model, tokenizer, t.format(word=word), layers, max_new_tokens)
-            for t in templates
-        ]
-        return {
-            v: torch.stack([p[v] for p in per_template]).mean(dim=0)
-            for v in POSITION_VARIANTS
-        }
-
-    concept_acts = word_mean(concept)
-    baseline_sum = {v: torch.zeros_like(concept_acts[v]) for v in POSITION_VARIANTS}
-    for w in random_words:
-        acts = word_mean(w)
-        for v in POSITION_VARIANTS:
-            baseline_sum[v] += acts[v]
-    return {
-        v: concept_acts[v] - baseline_sum[v] / len(random_words)
-        for v in POSITION_VARIANTS
-    }

@@ -1142,7 +1142,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sae-lens" },
     { name = "torch" },
-    { name = "transformer-lens" },
     { name = "transformers" },
     { name = "tyro" },
 ]
@@ -1161,7 +1160,6 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sae-lens", specifier = ">=6.45.3" },
     { name = "torch", specifier = ">=2.12.1" },
-    { name = "transformer-lens", specifier = ">=3.5.1" },
     { name = "transformers", specifier = ">=5.13.0" },
     { name = "tyro", specifier = ">=1.0.15" },
 ]
