@@ -22,6 +22,7 @@ from irc import env  # noqa: F401  (must be first: loads .env, sets HF_HOME)
 
 import argparse
 import json
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 import torch
@@ -72,10 +73,18 @@ def main() -> None:
                          "upstream's reference mode; use 1.0 (the RL rollout "
                          "distribution) for repeat-sampling analyses.")
     ap.add_argument("--max-new-tokens", type=int, default=200)
+    ap.add_argument("--concurrency", type=int, default=8,
+                    help="In-flight SGLang requests (server-side continuous "
+                         "batching packs them). 1 = sequential.")
     ap.add_argument("--sglang-url", default="http://localhost:30000")
     ap.add_argument("--out", default=None,
                     help="Output jsonl (default: results/nla_explanations_"
                          "{agg}_L{layer}.jsonl in the run dir). Appends.")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="Re-decode everything. Default resumes: (key, "
+                         "position) pairs already in the output file are "
+                         "skipped, so an interrupted run continues where it "
+                         "stopped instead of appending duplicates.")
     args = ap.parse_args()
 
     run_dir = REPO_ROOT / "artifacts" / "runs" / args.run_id
@@ -86,9 +95,26 @@ def main() -> None:
 
     client = NLAClient(AV_CHECKPOINT, sglang_url=args.sglang_url)
 
-    per_slot: dict[tuple[str, str], int] = {}
-    n_done = 0
-    with open(out_path, "a") as out:
+    # Resume: collect (key, position) pairs already in the output file so an
+    # interrupted run continues instead of appending duplicates. Tolerates a
+    # truncated final line from a killed process.
+    done: set[tuple[str, object]] = set()
+    if not args.no_resume and out_path.exists():
+        with open(out_path) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # partial trailing line from an interrupted write
+                done.add((rec["key"], rec["position"]))
+        if done:
+            print(f"[resume] {len(done)} explanations already in {out_path.name}"
+                  f" — skipping those")
+
+    def iter_tasks():
+        """Yield (row, pos, vector) tasks. Loads acts lazily so disk I/O
+        overlaps with in-flight generation rather than blocking startup."""
+        per_slot: dict[tuple[str, str], int] = {}
         for row in iter_generations(run_dir, args.words, args.conditions):
             if args.sentences and row["sentence_idx"] not in args.sentences:
                 continue
@@ -97,6 +123,16 @@ def main() -> None:
             if args.limit is not None and per_slot[slot] >= args.limit:
                 continue
             per_slot[slot] += 1
+
+            if args.agg == "mean":
+                positions = ["mean"]
+            else:
+                positions = None  # token count not known until acts are loaded
+            # Skip the disk read entirely when every position for this row is
+            # already done (mean: the one "mean" row; token: needs the load).
+            if positions is not None and all(
+                    (row["key"], p) in done for p in positions):
+                continue
 
             acts = torch.load(run_dir / row["acts_file"], map_location="cpu")
             layer_acts = acts[args.layer].float()  # [tokens, d_model]
@@ -110,28 +146,57 @@ def main() -> None:
                 vectors = [("mean", layer_acts.mean(dim=0))]
             else:
                 vectors = [(t, layer_acts[t]) for t in range(layer_acts.shape[0])]
-
             for pos, v in vectors:
-                explanation = client.generate(
-                    v,
-                    temperature=args.temperature,
-                    max_new_tokens=args.max_new_tokens,
-                )
-                rec = {
-                    "key": row["key"],
-                    "condition": row["condition"],
-                    "word": row["word"],
-                    "sentence_idx": row["sentence_idx"],
-                    "layer": args.layer,
-                    "position": pos,
-                    "norm": v.norm().item(),
-                    "explanation": explanation,
-                }
+                if (row["key"], pos) in done:
+                    continue
+                yield row, pos, v
+
+    def decode(task):
+        """Runs on a worker thread: blocking HTTP round-trip to SGLang. The
+        server's continuous batcher packs concurrent requests onto the GPU."""
+        row, pos, v = task
+        explanation = client.generate(
+            v, temperature=args.temperature, max_new_tokens=args.max_new_tokens)
+        rec = {
+            "key": row["key"],
+            "condition": row["condition"],
+            "word": row["word"],
+            "sentence_idx": row["sentence_idx"],
+            "layer": args.layer,
+            "position": pos,
+            "norm": v.norm().item(),
+            "explanation": explanation,
+        }
+        return row, pos, rec
+
+    # Bounded producer/consumer: keep ~2×concurrency requests in flight so the
+    # GPU batcher stays fed while the main thread loads the next acts + writes
+    # completed rows. Results are written as they finish (order is not
+    # significant — each jsonl row is self-describing via `key`/`position`).
+    n_done = 0
+    tasks = iter_tasks()
+    max_inflight = max(1, args.concurrency) * 2
+    with open(out_path, "a") as out, \
+            ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
+        inflight = set()
+        for _ in range(max_inflight):
+            try:
+                inflight.add(ex.submit(decode, next(tasks)))
+            except StopIteration:
+                break
+        while inflight:
+            done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+            for fut in done:
+                row, pos, rec = fut.result()
                 out.write(json.dumps(rec) + "\n")
                 out.flush()
                 n_done += 1
-                print(f"[{n_done}] {row['key']} pos={pos} "
-                      f"norm={rec['norm']:.0f}\n    {explanation[:160]}")
+                print(f"[{n_done}] {rec['key']} pos={pos} "
+                      f"norm={rec['norm']:.0f}\n    {rec['explanation'][:160]}")
+                try:
+                    inflight.add(ex.submit(decode, next(tasks)))
+                except StopIteration:
+                    pass
 
     print(f"\nwrote {n_done} explanations to {out_path}")
 
