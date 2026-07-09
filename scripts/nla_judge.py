@@ -23,7 +23,7 @@ and is versioned; the version is stored with every judgment.
 
 from irc import env  # noqa: F401  (must be first: loads .env, sets HF_HOME)
 
-import argparse
+import dataclasses
 import json
 import math
 import os
@@ -32,8 +32,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Literal
 
 import httpx
+import tyro
 
 from irc.constants import NLA_LAYER
 from irc.nla_judge_prompt import JUDGE_PROMPT_VERSION, JUDGE_PROMPTS
@@ -115,7 +117,7 @@ def parse_evidence(text: str) -> str | None:
     return None if ev.lower() in ("none", "") else ev
 
 
-def iter_tasks(expl_rows: list[dict], words: list[str] | None):
+def iter_tasks(expl_rows: list[dict], words: tuple[str, ...] | None):
     """Yield (row, target_word). Worded rows are judged against their own
     word; no_mention rows against every word with rows on that sentence."""
     words_by_sentence: dict[int, set[str]] = {}
@@ -131,36 +133,34 @@ def iter_tasks(expl_rows: list[dict], words: list[str] | None):
             yield r, t
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--run-id", required=True)
-    ap.add_argument("--words", nargs="*", default=None,
-                    help="Target concept words (Capitalized). Default: all.")
-    ap.add_argument("--sentences", nargs="*", type=int, default=None,
-                    help="Restrict to these sentence indices (matches "
-                         "nla_explain.py --sentences). Default: all.")
-    ap.add_argument("--conditions", nargs="*",
-                    default=["think", "dont_think", "no_mention"])
-    ap.add_argument("--agg", choices=["mean", "token"], default="token",
-                    help="Which explanations file to judge (matches "
-                         "nla_explain.py --agg).")
-    ap.add_argument("--layer", type=int, default=NLA_LAYER)
-    ap.add_argument("--model", default="openai/gpt-4.1")
-    ap.add_argument("--max-tokens", type=int, default=200)
-    ap.add_argument("--limit", type=int, default=None,
-                    help="Max judgments per (target word, condition).")
-    ap.add_argument("--concurrency", type=int, default=8,
-                    help="Number of judge calls in flight at once (I/O-bound; "
-                         "results are order-independent and written as they "
-                         "complete).")
-    ap.add_argument("--pilot", action="store_true",
-                    help="Judge only the first task, print the full exchange "
-                         "(prompt, response, logprob readout), write nothing.")
-    ap.add_argument("--out", default=None,
-                    help="Output jsonl (default: results/nla_judgments_"
-                         "{agg}_L{layer}.jsonl in the run dir). Appends.")
-    args = ap.parse_args()
+@dataclasses.dataclass
+class Config:
+    run_id: str
+    # Target concept words (Capitalized). Default: all.
+    words: tuple[str, ...] | None = None
+    # Restrict to these sentence indices (matches nla_explain.py --sentences).
+    # Default: all.
+    sentences: tuple[int, ...] | None = None
+    conditions: tuple[str, ...] = ("think", "dont_think", "no_mention")
+    # Which explanations file to judge (matches nla_explain.py --agg).
+    agg: Literal["mean", "token"] = "token"
+    layer: int = NLA_LAYER
+    model: str = "openai/gpt-4.1"
+    max_tokens: int = 200
+    # Max judgments per (target word, condition).
+    limit: int | None = None
+    # Number of judge calls in flight at once (I/O-bound; results are
+    # order-independent and written as they complete).
+    concurrency: int = 8
+    # Judge only the first task, print the full exchange (prompt, response,
+    # logprob readout), write nothing.
+    pilot: bool = False
+    # Output jsonl (default: results/nla_judgments_{agg}_L{layer}.jsonl in the
+    # run dir). Appends.
+    out: str | None = None
 
+
+def main(args: Config) -> None:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set — add it to .env")
@@ -326,4 +326,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Config, description=__doc__))

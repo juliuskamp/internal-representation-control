@@ -20,14 +20,15 @@ tokens only, so there is no BOS position to exclude.
 
 from irc import env  # noqa: F401  (must be first: loads .env, sets HF_HOME)
 
-import argparse
+import dataclasses
 import json
+import os
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
-
-import os
+from typing import Literal
 
 import torch
+import tyro
 
 from irc.constants import NLA_LAYER, NLA_REPO
 from irc.paths import RUNS
@@ -67,7 +68,7 @@ def resolve_checkpoint() -> Path:
     return root
 
 
-def iter_generations(run_dir: Path, words: list[str] | None, conditions: list[str]):
+def iter_generations(run_dir: Path, words: tuple[str, ...] | None, conditions: tuple[str, ...]):
     with open(run_dir / "generations.jsonl") as f:
         for line in f:
             row = json.loads(line)
@@ -80,42 +81,40 @@ def iter_generations(run_dir: Path, words: list[str] | None, conditions: list[st
             yield row
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--run-id", required=True)
-    ap.add_argument("--words", nargs="*", default=None,
-                    help="Concept words (Capitalized). Default: all.")
-    ap.add_argument("--conditions", nargs="*",
-                    default=["think", "dont_think", "no_mention"])
-    ap.add_argument("--sentences", nargs="*", type=int, default=None,
-                    help="Restrict to these sentence indices.")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="Max generations per (word, condition).")
-    ap.add_argument("--agg", choices=["mean", "token"], default="mean",
-                    help="mean: one vector per generation (mean over response "
-                         "tokens). token: one decode per response token.")
-    ap.add_argument("--layer", type=int, default=NLA_LAYER,
-                    help="Resid_post layer to decode (NLA is trained on 41; "
-                         "other layers are OOD for the actor).")
-    ap.add_argument("--temperature", type=float, default=0.0,
-                    help="0 (greedy) keeps the pipeline deterministic and is "
-                         "upstream's reference mode; use 1.0 (the RL rollout "
-                         "distribution) for repeat-sampling analyses.")
-    ap.add_argument("--max-new-tokens", type=int, default=200)
-    ap.add_argument("--concurrency", type=int, default=8,
-                    help="In-flight SGLang requests (server-side continuous "
-                         "batching packs them). 1 = sequential.")
-    ap.add_argument("--sglang-url", default="http://localhost:30000")
-    ap.add_argument("--out", default=None,
-                    help="Output jsonl (default: results/nla_explanations_"
-                         "{agg}_L{layer}.jsonl in the run dir). Appends.")
-    ap.add_argument("--no-resume", action="store_true",
-                    help="Re-decode everything. Default resumes: (key, "
-                         "position) pairs already in the output file are "
-                         "skipped, so an interrupted run continues where it "
-                         "stopped instead of appending duplicates.")
-    args = ap.parse_args()
+@dataclasses.dataclass
+class Config:
+    run_id: str
+    # Concept words (Capitalized). Default: all.
+    words: tuple[str, ...] | None = None
+    conditions: tuple[str, ...] = ("think", "dont_think", "no_mention")
+    # Restrict to these sentence indices.
+    sentences: tuple[int, ...] | None = None
+    # Max generations per (word, condition).
+    limit: int | None = None
+    # mean: one vector per generation (mean over response tokens).
+    # token: one decode per response token.
+    agg: Literal["mean", "token"] = "mean"
+    # Resid_post layer to decode (NLA is trained on 41; other layers are OOD
+    # for the actor).
+    layer: int = NLA_LAYER
+    # 0 (greedy) keeps the pipeline deterministic and is upstream's reference
+    # mode; use 1.0 (the RL rollout distribution) for repeat-sampling analyses.
+    temperature: float = 0.0
+    max_new_tokens: int = 200
+    # In-flight SGLang requests (server-side continuous batching packs them).
+    # 1 = sequential.
+    concurrency: int = 8
+    sglang_url: str = "http://localhost:30000"
+    # Output jsonl (default: results/nla_explanations_{agg}_L{layer}.jsonl in
+    # the run dir). Appends.
+    out: str | None = None
+    # Resumes by default: (key, position) pairs already in the output file are
+    # skipped, so an interrupted run continues where it stopped instead of
+    # appending duplicates. --no-resume re-decodes everything.
+    resume: bool = True
 
+
+def main(args: Config) -> None:
     run_dir = RUNS / args.run_id
     out_path = Path(args.out) if args.out else (
         run_dir / "results" / f"nla_explanations_{args.agg}_L{args.layer}.jsonl"
@@ -128,7 +127,7 @@ def main() -> None:
     # interrupted run continues instead of appending duplicates. Tolerates a
     # truncated final line from a killed process.
     done: set[tuple[str, object]] = set()
-    if not args.no_resume and out_path.exists():
+    if args.resume and out_path.exists():
         with open(out_path) as f:
             for line in f:
                 try:
@@ -248,4 +247,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Config, description=__doc__))

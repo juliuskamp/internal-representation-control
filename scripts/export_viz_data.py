@@ -97,7 +97,7 @@ def nla_entry(expl_by_pos: dict, judg_by_pos: dict, n_tokens: int) -> dict:
 
 @dataclasses.dataclass
 class Config:
-    run_id: str = "run1-core"
+    run_id: str
 
 
 def rnd(t: torch.Tensor, nd: int = 3) -> list:
