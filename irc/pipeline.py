@@ -211,6 +211,7 @@ def _load_saes(sae_layers: list[int], device: str = "cuda", total_timeout: float
     total wall-clock budget shared across all layers."""
     from sae_lens import SAE
 
+    env.require_hf_token()
     saes = {}
     deadline = time.monotonic() + total_timeout
     for layer in sae_layers:

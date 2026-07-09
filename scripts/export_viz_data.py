@@ -115,11 +115,9 @@ def main(cfg: Config) -> None:
     run_dir = RUNS / cfg.run_id
     records = _load_records(run_dir)
 
-    from transformers import AutoTokenizer
+    from irc.model import load_tokenizer
 
-    from irc.model import MODEL_ID
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    tokenizer = load_tokenizer()
 
     banks = {}
     for v in VARIANTS:

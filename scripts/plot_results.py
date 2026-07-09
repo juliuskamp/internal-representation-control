@@ -115,11 +115,9 @@ def delta_curves(df: pd.DataFrame, fig_dir: Path) -> None:
 def token_heatmaps(run_dir: Path, cfg: Config, fig_dir: Path) -> None:
     import re
 
-    from transformers import AutoTokenizer
+    from irc.model import load_tokenizer
 
-    from irc.model import MODEL_ID
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    tokenizer = load_tokenizer()
     records = {}
     with (run_dir / "generations.jsonl").open() as f:
         for line in f:

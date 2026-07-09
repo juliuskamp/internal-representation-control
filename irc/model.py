@@ -1,6 +1,6 @@
 """Model loading and residual-stream activation capture for Gemma 3 27B-it."""
 
-from irc import env  # noqa: F401  (must run before transformers import)
+from irc import env  # must run before transformers import
 
 import torch
 from torch import nn
@@ -10,12 +10,15 @@ MODEL_ID = "google/gemma-3-27b-it"
 
 
 def load_tokenizer(model_id: str = MODEL_ID):
+    env.require_hf_token()
     return AutoTokenizer.from_pretrained(model_id)
 
 
 def load_model(model_id: str = MODEL_ID, device: str = "cuda"):
     """Load the model in bfloat16 (never fp32/quantized — we measure activations)."""
     from transformers import AutoModelForCausalLM
+
+    env.require_hf_token()
 
     try:
         model = AutoModelForCausalLM.from_pretrained(
