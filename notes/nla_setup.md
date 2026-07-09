@@ -82,6 +82,27 @@ analyses ("concept appears in k of n samples per vector"), sample repeats at
 temperature 1.0 instead — that's the RL rollout distribution the actor was
 trained under; 0.7 is neither that nor reproducible.
 
+## Viewer integration
+
+`scripts/export_viz_data.py` picks up `results/nla_explanations_token_L41.jsonl`
+(per-token rows only) and attaches, per condition entry, the explanation texts
+plus a binary `mention` flag: 1 if the target word appears verbatim
+(whole-word, case-insensitive) in that token's explanation. no_mention
+explanations are word-independent and only attached to words that have their
+own NLA rows on that sentence. The viewer (`docs/index.html`) gets a fourth
+measurement, "NLA explanation — word mentioned": binary 0/1 chart at fixed
+layer 41 (slider disabled), with collapsed-by-default per-condition sections
+below the chart showing each token's full explanation (mention rows
+highlighted).
+
+First data point (Secrecy s36, greedy): **0 verbatim mentions in all three
+conditions** — but the think-condition explanations are saturated with
+secrecy *semantics* ("clandestine", "concealing", "hush", "forbidden",
+"secretive") that are absent from dont_think/no_mention, which decode as
+generic grammar-lesson descriptions. The exact-word binary is a very
+conservative detector; a synonym/semantic-set match would likely separate
+the conditions here.
+
 ## Verification (2026-07-09, run1-core, layer 41, mean over response tokens)
 
 Decoded `Dust` s27/s38/s39 across think / dont_think / no_mention at temp 0.7

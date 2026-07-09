@@ -9,6 +9,13 @@ For every stored (word, sentence, condition) run of a pipeline run:
     in shared-bands.json.gz instead of being duplicated into every word chunk.
   - SAE activation per layer x selected latent x token (aggregation and latent
     toggling happen client-side in the viewer)
+  - NLA explanations per token (layer 41), when results/nla_explanations_
+    token_L41.jsonl exists in the run dir (written by scripts/nla_explain.py
+    --agg token): the explanation text plus a binary per-token flag for
+    whether the target word appears verbatim (case-insensitive, whole word)
+    in the explanation. no_mention explanations are word-independent; they
+    are attached (and the flag recomputed) per word, but only for words that
+    have their own NLA rows on that sentence.
 All series are trimmed to the sentence's own tokens (the model sometimes emits a
 trailing whitespace token before <end_of_turn>; verified to be the only length
 mismatch, and responses always begin directly with the sentence tokens).
@@ -27,6 +34,7 @@ from irc import env  # noqa: F401
 import dataclasses
 import gzip
 import json
+import re
 from pathlib import Path
 
 import torch
@@ -37,7 +45,33 @@ from irc.words_paper import CONTROL_WORDS_PAPER
 
 VARIANTS = ("paper", "word_tokens")
 SAE_LAYERS = [16, 31, 40, 53]
+NLA_LAYER = 41  # extraction layer of the NLA actor (see notes/nla_setup.md)
 DATA_DIR = Path("docs/data")
+
+
+def load_nla(run_dir: Path) -> dict:
+    """(condition, word|None, sentence_idx) -> {token_pos: explanation}."""
+    path = run_dir / "results" / f"nla_explanations_token_L{NLA_LAYER}.jsonl"
+    out: dict = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        r = json.loads(line)
+        if r["layer"] != NLA_LAYER or not isinstance(r["position"], int):
+            continue
+        out.setdefault((r["condition"], r["word"], r["sentence_idx"]), {})[
+            r["position"]] = r["explanation"]
+    return out
+
+
+def nla_entry(expl_by_pos: dict, word: str, n_tokens: int) -> dict:
+    """Trim to sentence tokens; flag verbatim whole-word mentions of `word`."""
+    expl = [expl_by_pos.get(t, "") for t in range(n_tokens)]
+    pat = re.compile(rf"\b{re.escape(word.lower())}\b", re.IGNORECASE)
+    return {
+        "explanations": expl,
+        "mention": [int(bool(pat.search(e))) for e in expl],
+    }
 
 
 @dataclasses.dataclass
@@ -80,6 +114,11 @@ def main(cfg: Config) -> None:
     saes = _load_saes(SAE_LAYERS)
     latents_dir = Path("artifacts/latents_v1")
     sel_cache: dict[str, dict | None] = {}
+
+    nla = load_nla(run_dir)
+    # (word, si) pairs with their own NLA rows — gates attaching the shared
+    # no_mention explanations so they aren't duplicated into all 50 words.
+    nla_worded = {(w, si) for (_, w, si) in nla if w is not None}
 
     def sel_for(word: str) -> dict | None:
         if word not in sel_cache:
@@ -128,6 +167,9 @@ def main(cfg: Config) -> None:
                 "sentence": rec["sentence"], "tokens": toks, "conditions": {},
             })
             entry: dict = {"exact": rec["exact_match"], "completion": rec["completion"]}
+            expl_by_pos = nla.get((rec["condition"], rec["word"], rec["sentence_idx"]))
+            if expl_by_pos and (word, rec["sentence_idx"]) in nla_worded:
+                entry["nla"] = nla_entry(expl_by_pos, word, len(toks))
             if cos_v is not None:
                 for v in VARIANTS:
                     e = {"target": rnd(cos_v[v][:, banks[v]["w_idx"][word]].cpu())}
@@ -168,6 +210,7 @@ def main(cfg: Config) -> None:
         "sae_layers": SAE_LAYERS,
         "n_layers": 62,
         "variants": list(VARIANTS),
+        "nla_layer": NLA_LAYER,
         "words": sorted(data),
     }, indent=1))
     print(f"{len(data)} word chunks + shared bands: "
