@@ -54,7 +54,10 @@ NLA `layer_index=41` = **output of decoder block 41** (resid_post), per
 `nla/datagen/extractors.py` in the training repo. Our `ResidualCapture`
 (`irc/model.py`) hooks decoder-layer outputs with the same 0-based indexing,
 so **`acts[41]` is the right slice** — no ±1 offset. Stored acts are response
-tokens only (no BOS position). The client rescales every vector to
+tokens only (no BOS position), but can include trailing whitespace token(s)
+(the exact-match check strips the decoded text, so `sentence + "\n"` passes
+with an extra token); `nla_explain.py` truncates to the sentence's token
+count, same as `export_viz_data.py`. The client rescales every vector to
 L2=60000 before injection, so bf16 storage / norm differences don't matter
 beyond direction.
 

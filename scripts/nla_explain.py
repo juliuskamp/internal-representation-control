@@ -100,6 +100,11 @@ def main() -> None:
 
             acts = torch.load(run_dir / row["acts_file"], map_location="cpu")
             layer_acts = acts[args.layer].float()  # [tokens, d_model]
+            n_sent = len(client.tokenizer(
+                row["sentence"], add_special_tokens=False)["input_ids"])
+            assert layer_acts.shape[0] >= n_sent, \
+                f"{row['key']}: acts shorter than sentence"
+            layer_acts = layer_acts[:n_sent]  # drop trailing whitespace token(s)
 
             if args.agg == "mean":
                 vectors = [("mean", layer_acts.mean(dim=0))]
