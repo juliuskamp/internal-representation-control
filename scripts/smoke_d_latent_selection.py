@@ -7,15 +7,12 @@ Selection: rank latents by (mean max-activation on concept texts) minus
 
 from irc import env  # noqa: F401
 
-import json
-import os
-import urllib.request
-
 import torch
 from sae_lens import SAE
 
 from irc.constants import SAE_ID_TEMPLATE, SAE_RELEASE
 from irc.model import ResidualCapture, chat_ids, load_model, load_tokenizer
+from irc.neuronpedia import fetch_label
 
 # Pinned SAE variant: latent indices line up with Neuronpedia's auto-interp
 # labels ("{layer}-gemmascope-2-res-16k"); see irc/constants.py.
@@ -55,21 +52,11 @@ def max_feature_acts(model, tokenizer, sae, texts: list[str]) -> torch.Tensor:
 
 
 def neuronpedia_label(layer: int, index: int) -> str:
-    """Fetch the auto-interp explanation for one latent; message string on failure."""
-    url = f"https://www.neuronpedia.org/api/feature/gemma-3-27b-it/{layer}-gemmascope-2-res-16k/{index}"
-    headers = {"User-Agent": "smoke-test"}
-    if os.environ.get("NEURONPEDIA_API_KEY"):
-        headers["x-api-key"] = os.environ["NEURONPEDIA_API_KEY"]
+    """Auto-interp explanation for one latent; message string on failure."""
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.load(r)
+        return fetch_label(layer, index)
     except Exception as e:
         return f"(neuronpedia lookup failed: {e})"
-    exps = data.get("explanations") or []
-    if exps:
-        return exps[0].get("description", "")
-    return "(no explanation on record)"
 
 
 def main() -> None:

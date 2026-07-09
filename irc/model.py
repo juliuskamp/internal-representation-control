@@ -83,6 +83,18 @@ class ResidualCapture:
         return False
 
 
+def sentence_token_ids(tokenizer, sentence: str) -> list[int]:
+    """Token ids of a bare sentence (no BOS/specials) — the unit that stored
+    response activations are aligned and trimmed to."""
+    return tokenizer(sentence, add_special_tokens=False)["input_ids"]
+
+
+def sentence_display_tokens(tokenizer, sentence: str) -> list[str]:
+    """Human-readable per-token strings (for axis labels / the viewer)."""
+    ids = sentence_token_ids(tokenizer, sentence)
+    return [t.replace("▁", " ") for t in tokenizer.convert_ids_to_tokens(ids)]
+
+
 def chat_ids(tokenizer, user_message: str, device: str = "cuda") -> torch.Tensor:
     """Tokenize a single-turn user message with the chat template."""
     enc = tokenizer.apply_chat_template(

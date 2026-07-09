@@ -42,9 +42,9 @@ import tyro
 
 from irc.constants import N_LAYERS, NLA_LAYER, SAE_LAYERS
 from irc.constants import VECTOR_VARIANTS as VARIANTS
+from irc.model import sentence_display_tokens
 from irc.paths import ARTIFACTS, DOCS_DATA, RUNS
-from irc.pipeline import load_records, load_saes
-from irc.words_paper import CONTROL_WORDS_PAPER
+from irc.pipeline import concept_cosines, load_records, load_saes, load_vector_bank
 
 DATA_DIR = DOCS_DATA
 
@@ -119,16 +119,7 @@ def main(cfg: Config) -> None:
 
     tokenizer = load_tokenizer()
 
-    banks = {}
-    for v in VARIANTS:
-        bank = torch.load(ARTIFACTS / "concept_vectors" / f"bank_{v}_v1.pt")
-        words = list(bank["vectors"].keys())
-        V = torch.stack([bank["vectors"][w] for w in words]).cuda()
-        banks[v] = {
-            "w_idx": {w: i for i, w in enumerate(words)},
-            "ctrl_idx": torch.tensor([i for i, w in enumerate(words) if w in set(CONTROL_WORDS_PAPER)]),
-            "Vn": V / V.norm(dim=-1, keepdim=True),
-        }
+    banks = {v: load_vector_bank(v) for v in VARIANTS}
 
     saes = load_saes(SAE_LAYERS)
     latents_dir = ARTIFACTS / "latents_v1"
@@ -162,11 +153,7 @@ def main(cfg: Config) -> None:
             sorted({r["word"] for r in records if r["word"] and r["sentence_idx"] == rec["sentence_idx"]})
         )
         if sk not in tokens_cache:
-            tokens_cache[sk] = [
-                t.replace("▁", " ")
-                for t in tokenizer.convert_ids_to_tokens(
-                    tokenizer(rec["sentence"], add_special_tokens=False)["input_ids"])
-            ]
+            tokens_cache[sk] = sentence_display_tokens(tokenizer, rec["sentence"])
         toks = tokens_cache[sk]
 
         cos_v = band_v = feats = None
@@ -174,10 +161,9 @@ def main(cfg: Config) -> None:
             A = torch.load(run_dir / rec["acts_file"]).float().cuda()  # (L,T,D)
             assert A.shape[1] >= len(toks), f"{rec['key']}: acts shorter than sentence"
             A = A[:, : len(toks)]  # drop trailing whitespace token(s)
-            An = A / A.norm(dim=-1, keepdim=True)
             cos_v, band_v = {}, {}
             for v in VARIANTS:
-                cos = torch.einsum("ltd,wld->lwt", An, banks[v]["Vn"])  # (L,W,T)
+                cos = concept_cosines(A, banks[v]["Vn"])  # (L,W,T)
                 cos_v[v] = cos
                 cc = cos[:, banks[v]["ctrl_idx"]]  # (L, n_control, T)
                 band = {"nullmean": rnd(cc.mean(dim=1).cpu()), "nullstd": rnd(cc.std(dim=1).cpu())}

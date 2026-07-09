@@ -31,6 +31,7 @@ import torch
 import tyro
 
 from irc.constants import NLA_LAYER, NLA_REPO
+from irc.model import sentence_token_ids
 from irc.paths import RUNS
 from irc.vendor.nla_inference import _EMBED_KEY_SUFFIXES, NLAClient
 
@@ -159,8 +160,7 @@ def main(args: Config) -> None:
             if args.agg == "mean":
                 positions: list[object] = ["mean"]
             else:
-                n_sent = len(client.tokenizer(
-                    row["sentence"], add_special_tokens=False)["input_ids"])
+                n_sent = len(sentence_token_ids(client.tokenizer, row["sentence"]))
                 positions = list(range(n_sent))
             positions = [p for p in positions if (row["key"], p) not in done]
             if positions:  # skip fully-done rows (no acts load happens for them)
@@ -182,8 +182,7 @@ def main(args: Config) -> None:
         for row, positions in iter_row_positions():
             acts = torch.load(run_dir / row["acts_file"], map_location="cpu")
             layer_acts = acts[args.layer].float()  # [tokens, d_model]
-            n_sent = len(client.tokenizer(
-                row["sentence"], add_special_tokens=False)["input_ids"])
+            n_sent = len(sentence_token_ids(client.tokenizer, row["sentence"]))
             assert layer_acts.shape[0] >= n_sent, \
                 f"{row['key']}: acts shorter than sentence"
             layer_acts = layer_acts[:n_sent]  # drop trailing whitespace token(s)

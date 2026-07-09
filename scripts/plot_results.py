@@ -113,7 +113,7 @@ def delta_curves(df: pd.DataFrame, fig_dir: Path) -> None:
 
 
 def token_heatmaps(run_dir: Path, cfg: Config, fig_dir: Path) -> None:
-    from irc.model import load_tokenizer
+    from irc.model import load_tokenizer, sentence_display_tokens
 
     tokenizer = load_tokenizer()
     records = {}
@@ -128,8 +128,7 @@ def token_heatmaps(run_dir: Path, cfg: Config, fig_dir: Path) -> None:
         key = path.stem.removeprefix(f"{cfg.heatmap_layer_variant}__")
         rec = records[key]
         cos = torch.load(path).numpy()  # (layers, tokens)
-        ids = tokenizer(rec["sentence"], add_special_tokens=False)["input_ids"]
-        toks = [t.replace("▁", " ") for t in tokenizer.convert_ids_to_tokens(ids)]
+        toks = sentence_display_tokens(tokenizer, rec["sentence"])
         fig, ax = plt.subplots(figsize=(0.55 * len(toks) + 2.2, 4.6))
         vmax = max(abs(cos).max(), 1e-6)
         im = ax.imshow(cos, aspect="auto", cmap=DIVERGING.reversed(),

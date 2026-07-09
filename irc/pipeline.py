@@ -18,7 +18,6 @@ from irc import env  # noqa: F401
 import json
 import random
 import time
-import urllib.request
 from pathlib import Path
 
 import torch
@@ -27,6 +26,7 @@ from irc.conditions import WORD_FREE_CONDITIONS, build_prompt
 from irc.concept_vectors import _word_token_span, build_vector_bank
 from irc.constants import SAE_ID_TEMPLATE, SAE_RELEASE
 from irc.model import ResidualCapture, chat_ids, get_decoder_layers
+from irc.neuronpedia import fetch_label
 from irc.paths import ARTIFACTS
 from irc.words import WORD_TEMPLATES_V1
 from irc.words_paper import (
@@ -187,14 +187,8 @@ def _neuronpedia_label(layer: int, index: int, cache: dict, cache_path: Path) ->
     key = f"{layer}/{index}"
     if key in cache:
         return cache[key]
-    url = (f"https://www.neuronpedia.org/api/feature/gemma-3-27b-it/"
-           f"{layer}-gemmascope-2-res-16k/{index}")
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "irc-pipeline"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.load(r)
-        exps = data.get("explanations") or []
-        label = exps[0].get("description", "") if exps else "(no explanation)"
+        label = fetch_label(layer, index)
     except Exception as e:
         return f"(lookup failed: {e})"  # not cached — may be transient
     cache[key] = label
@@ -327,6 +321,28 @@ def load_records(run_dir: Path) -> list[dict]:
         return [json.loads(line) for line in f]
 
 
+def load_vector_bank(variant: str, device: str = "cuda") -> dict:
+    """Normalized concept-vector bank for measurement:
+    {"w_idx": word -> row, "ctrl_idx": control-word rows (CONTROL_WORDS_PAPER
+    order), "Vn": (W, L, D) unit vectors on `device`}."""
+    bank = torch.load(ARTIFACTS / "concept_vectors" / f"bank_{variant}_v1.pt")
+    word_list = list(bank["vectors"].keys())
+    w_idx = {w: i for i, w in enumerate(word_list)}
+    V = torch.stack([bank["vectors"][w] for w in word_list]).to(device)
+    return {
+        "w_idx": w_idx,
+        "ctrl_idx": torch.tensor([w_idx[w] for w in CONTROL_WORDS_PAPER]),
+        "Vn": V / V.norm(dim=-1, keepdim=True),
+    }
+
+
+def concept_cosines(A: torch.Tensor, Vn: torch.Tensor) -> torch.Tensor:
+    """Cosine of activations (L, T, D) with unit concept vectors (W, L, D)
+    -> (L, W, T)."""
+    An = A / A.norm(dim=-1, keepdim=True)
+    return torch.einsum("ltd,wld->lwt", An, Vn)
+
+
 @torch.no_grad()
 def measure(
     run_dir: Path,
@@ -351,24 +367,16 @@ def measure(
         return torch.load(run_dir / rec["acts_file"]).float().to(device)
 
     # ---- concept vectors
-    banks = {
-        v: torch.load(ARTIFACTS / "concept_vectors" / f"bank_{v}_v1.pt")
-        for v in variants
-    }
     rows = []
-    for variant, bank in banks.items():
-        word_list = list(bank["vectors"].keys())
-        w_idx = {w: i for i, w in enumerate(word_list)}
-        ctrl_idx = torch.tensor([w_idx[w] for w in CONTROL_WORDS_PAPER])
-        V = torch.stack([bank["vectors"][w] for w in word_list]).to(device)  # (W, L, D)
-        Vn = V / V.norm(dim=-1, keepdim=True)
+    for variant in variants:
+        bank = load_vector_bank(variant, device)
+        w_idx, ctrl_idx, Vn = bank["w_idx"], bank["ctrl_idx"], bank["Vn"]
         for word, si in pairs:
             for condition in conditions:
                 A = acts_for(condition, word, si)
                 if A is None:
                     continue
-                An = A / A.norm(dim=-1, keepdim=True)  # (L, T, D)
-                cos = torch.einsum("ltd,wld->lwt", An, Vn)  # (L, W, T)
+                cos = concept_cosines(A, Vn)  # (L, W, T)
                 tok_mean, tok_max = cos.mean(-1), cos.max(-1).values  # (L, W)
                 tgt = w_idx[word]
                 null_mean = tok_mean[:, ctrl_idx]
