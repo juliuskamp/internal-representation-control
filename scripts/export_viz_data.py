@@ -43,7 +43,7 @@ import tyro
 from irc.constants import N_LAYERS, NLA_LAYER, SAE_LAYERS
 from irc.constants import VECTOR_VARIANTS as VARIANTS
 from irc.paths import ARTIFACTS, DOCS_DATA, RUNS
-from irc.pipeline import _load_records, _load_saes
+from irc.pipeline import load_records, load_saes
 from irc.words_paper import CONTROL_WORDS_PAPER
 
 DATA_DIR = DOCS_DATA
@@ -113,7 +113,7 @@ def write_gz(path: Path, obj) -> tuple[int, int]:
 @torch.no_grad()
 def main(cfg: Config) -> None:
     run_dir = RUNS / cfg.run_id
-    records = _load_records(run_dir)
+    records = load_records(run_dir)
 
     from irc.model import load_tokenizer
 
@@ -130,7 +130,7 @@ def main(cfg: Config) -> None:
             "Vn": V / V.norm(dim=-1, keepdim=True),
         }
 
-    saes = _load_saes(SAE_LAYERS)
+    saes = load_saes(SAE_LAYERS)
     latents_dir = ARTIFACTS / "latents_v1"
     sel_cache: dict[str, dict | None] = {}
 

@@ -86,7 +86,7 @@ def pair_table(
 
 # --------------------------------------------------------------- generate ----
 
-def _record_key(condition: str, word: str | None, si: int) -> str:
+def record_key(condition: str, word: str | None, si: int) -> str:
     return f"{condition}__{word or 'NONE'}__s{si:02d}"
 
 
@@ -140,7 +140,7 @@ def run_generations(
     for condition in conditions:
         for word, si in pairs:
             w = None if condition in WORD_FREE_CONDITIONS else word
-            key = _record_key(condition, w, si)
+            key = record_key(condition, w, si)
             if key in seen or key in done:
                 continue
             seen.add(key)
@@ -153,7 +153,7 @@ def run_generations(
             sentence = SENTENCES_PAPER[si]
             prompt = build_prompt(condition, sentence, word)
             res = _generate_and_capture(model, tokenizer, prompt, sentence)
-            key = _record_key(condition, word, si)
+            key = record_key(condition, word, si)
             acts_file = None
             if res["acts"] is not None:
                 acts_file = f"acts/{key}.pt"
@@ -202,7 +202,7 @@ def _neuronpedia_label(layer: int, index: int, cache: dict, cache_path: Path) ->
     return label
 
 
-def _load_saes(sae_layers: list[int], device: str = "cuda", total_timeout: float = 300.0) -> dict:
+def load_saes(sae_layers: list[int], device: str = "cuda", total_timeout: float = 300.0) -> dict:
     """Load the pinned SAEs, retrying on transient network errors.
 
     sae_lens fetches the safetensors header over HTTP on every load (hardcoded
@@ -243,7 +243,7 @@ def select_latents(
     near-zero max activation on the 50 experiment sentences."""
     out_dir = ARTIFACTS / "latents_v1"
     out_dir.mkdir(parents=True, exist_ok=True)
-    saes = _load_saes(sae_layers)
+    saes = load_saes(sae_layers)
     np_cache_path = ARTIFACTS / "neuronpedia_cache.json"
     np_cache = json.loads(np_cache_path.read_text()) if np_cache_path.exists() else {}
 
@@ -322,7 +322,7 @@ def select_latents(
 
 # ---------------------------------------------------------------- measure ----
 
-def _load_records(run_dir: Path) -> list[dict]:
+def load_records(run_dir: Path) -> list[dict]:
     with (run_dir / "generations.jsonl").open() as f:
         return [json.loads(line) for line in f]
 
@@ -338,14 +338,14 @@ def measure(
 ) -> None:
     import pandas as pd
 
-    records = {r["key"]: r for r in _load_records(run_dir)}
+    records = {r["key"]: r for r in load_records(run_dir)}
     results_dir = run_dir / "results"
     (results_dir / "token_cosines").mkdir(parents=True, exist_ok=True)
     (results_dir / "null_means").mkdir(parents=True, exist_ok=True)
 
     def acts_for(condition: str, word: str, si: int) -> torch.Tensor | None:
         w = None if condition in WORD_FREE_CONDITIONS else word
-        rec = records.get(_record_key(condition, w, si))
+        rec = records.get(record_key(condition, w, si))
         if rec is None or not rec["acts_file"]:
             return None
         return torch.load(run_dir / rec["acts_file"]).float().to(device)
@@ -372,7 +372,7 @@ def measure(
                 tok_mean, tok_max = cos.mean(-1), cos.max(-1).values  # (L, W)
                 tgt = w_idx[word]
                 null_mean = tok_mean[:, ctrl_idx]
-                key = _record_key(condition, word, si)
+                key = record_key(condition, word, si)
                 torch.save(cos[:, tgt].cpu(),
                            results_dir / "token_cosines" / f"{variant}__{key}.pt")
                 # (n_layers, n_control_words) token-mean cosines, so plots can
@@ -397,7 +397,7 @@ def measure(
 
     # ---- SAE latents
     latents_dir = ARTIFACTS / "latents_v1"
-    saes = _load_saes(sae_layers, device=device)
+    saes = load_saes(sae_layers, device=device)
     sae_rows = []
     for word, si in pairs:
         lat_path = latents_dir / f"{word}.json"

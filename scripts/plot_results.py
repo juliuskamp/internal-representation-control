@@ -113,8 +113,6 @@ def delta_curves(df: pd.DataFrame, fig_dir: Path) -> None:
 
 
 def token_heatmaps(run_dir: Path, cfg: Config, fig_dir: Path) -> None:
-    import re
-
     from irc.model import load_tokenizer
 
     tokenizer = load_tokenizer()
@@ -126,7 +124,8 @@ def token_heatmaps(run_dir: Path, cfg: Config, fig_dir: Path) -> None:
     tc_dir = run_dir / "results" / "token_cosines"
     think_files = sorted(tc_dir.glob(f"{cfg.heatmap_layer_variant}__think__*.pt"))
     for path in think_files[: cfg.heatmap_examples]:
-        key = re.sub(rf"^{cfg.heatmap_layer_variant}__", "", path.stem)
+        # filenames are f"{variant}__{record_key}.pt" (see pipeline.measure)
+        key = path.stem.removeprefix(f"{cfg.heatmap_layer_variant}__")
         rec = records[key]
         cos = torch.load(path).numpy()  # (layers, tokens)
         ids = tokenizer(rec["sentence"], add_special_tokens=False)["input_ids"]
