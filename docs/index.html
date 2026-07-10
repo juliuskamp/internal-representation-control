@@ -170,7 +170,8 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
       <select id="meas">
         <option value="word_tokens">Concept vector — word tokens</option>
         <option value="paper">Concept vector — paper method</option>
-        <option value="sae">SAE latents (top-5)</option>
+        <option value="sae">SAE latents — v1 (top-5)</option>
+        <option value="sae_v2">SAE latents — v2, contrastive (top-5)</option>
         <option value="nla">NLA explanation — judge score</option>
       </select></div>
     <div class="ctl" id="aggctl" hidden><label for="agg">Latent aggregation</label>
@@ -366,8 +367,13 @@ function applyExactStyling() {
 
 function currentSlot() { return CHUNKS[state.word].slots[state.si]; }
 
-function isSAE() { return state.meas === "sae"; }
+// Both SAE latent-selection versions share the SAE code paths; the slot keys
+// are "sae"/"sae_latents" (v1) and "sae_v2"/"sae_latents_v2" — i.e. the data
+// key always equals state.meas.
+function isSAE() { return state.meas === "sae" || state.meas === "sae_v2"; }
 function isNLA() { return state.meas === "nla"; }
+function saeVer() { return state.meas === "sae_v2" ? "v2" : "v1"; }
+function saeMetaFor(slot) { return state.meas === "sae_v2" ? slot.sae_latents_v2 : slot.sae_latents; }
 
 function activeLayer() {
   if (isNLA()) return INDEX.nla_layer || 41;
@@ -383,10 +389,10 @@ function fmtVal(v) {
   return isSAE() ? v.toFixed(1) : isNLA() ? v.toFixed(1) : v.toFixed(3);
 }
 
-const latentKey = (layer, latent) => `${state.word}|${layer}|${latent}`;
+const latentKey = (layer, latent) => `${state.word}|${saeVer()}|${layer}|${latent}`;
 
 function saeLatentMeta(slot, L) {
-  const meta = (slot.sae_latents || []).find((m) => m.layer === L);
+  const meta = (saeMetaFor(slot) || []).find((m) => m.layer === L);
   return meta ? meta.latents : [];
 }
 
@@ -422,7 +428,7 @@ function seriesData() {
         vals = rec.nla && rec.nla.score.some((s) => s != null) ? rec.nla.score : null;
       } else if (isSAE()) {
         const li = INDEX.sae_layers.indexOf(L);
-        const rows = rec.sae ? rec.sae[li] : null;
+        const rows = rec[state.meas] ? rec[state.meas][li] : null;
         vals = rows ? aggregateSAE(rows, saeLatentMeta(slot, L)) : null;
       } else if (rec[state.meas]) {
         vals = rec[state.meas].target[L];
@@ -488,7 +494,10 @@ function render() {
         `${INDEX.nla_judge ? INDEX.nla_judge.model + ` (prompt ${INDEX.nla_judge.prompt_version})` : "LLM"} judge, ` +
         `0–100 logit-expectation score for “${state.word.toLowerCase()}” in the explanation`
       : isSAE()
-      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents`
+      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents · ` +
+        (saeVer() === "v2"
+          ? "selection v2: contrastive vs 99 baseline words, excluded on 100 control-word prompts (never sees the experiment sentences)"
+          : "selection v1: raw concept-token activation, excluded on the 50 experiment sentences")
       : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
 }
 
@@ -629,7 +638,9 @@ function drawChart(tokens, conds) {
 
 function renderLatents(slot) {
   const box = $("latents");
-  if (!isSAE() || !slot.sae_latents) { box.hidden = true; return; }
+  if (!isSAE() || !saeMetaFor(slot)) { box.hidden = true; return; }
+  box.querySelector("h2").textContent =
+    `Selected SAE latents at this layer (selection ${saeVer()})`;
   const L = activeLayer();
   const latents = saeLatentMeta(slot, L);
   const ul = $("latentlist"); ul.innerHTML = "";
@@ -811,6 +822,11 @@ function restrictOptions(sel, allowed) {
 async function init() {
   SI_INDEX = Object.fromEntries((INDEX.sentence_order || []).map((s, i) => [s, i]));
 
+  // data exported before latent-selection v2 existed has no sae_v2 series
+  if (!(INDEX.sae_versions || ["v1"]).includes("v2")) {
+    const o = $("meas").querySelector('option[value="sae_v2"]');
+    o.hidden = true; o.disabled = true;
+  }
   restrictOptions($("meas"), restrict.meas);
   restrictOptions($("base"), restrict.base);
 
