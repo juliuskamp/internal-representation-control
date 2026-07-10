@@ -33,6 +33,10 @@ class Config:
     sae_layers: tuple[int, ...] = constants.SAE_LAYERS
     topk_latents: int = 5
     neuronpedia: bool = True
+    # Latent-selection version: "v1" (raw concept_mean, exclusion on the 50
+    # experiment sentences) or "v2" (contrastive score vs the 99 baseline
+    # words, exclusion on the 100 control words' template prompts).
+    latents_version: str = "v1"
 
 
 def main(cfg: Config) -> None:
@@ -84,13 +88,14 @@ def main(cfg: Config) -> None:
         pipeline.run_generations(model, tokenizer, run_dir, pairs, list(cfg.conditions))
     if "latents" in cfg.stages:
         pipeline.select_latents(
-            model, tokenizer, words, list(cfg.sae_layers), cfg.topk_latents, cfg.neuronpedia
+            model, tokenizer, words, list(cfg.sae_layers), cfg.topk_latents,
+            cfg.neuronpedia, version=cfg.latents_version,
         )
     if "measure" in cfg.stages:
         del model  # free VRAM for SAE encodes
         pipeline.measure(
             run_dir, pairs, list(cfg.conditions), list(cfg.vector_variants),
-            list(cfg.sae_layers),
+            list(cfg.sae_layers), latents_version=cfg.latents_version,
         )
 
 

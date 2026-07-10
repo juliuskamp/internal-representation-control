@@ -35,6 +35,8 @@ Layers 15–55 mean, n=65 pairs, Wilcoxon signed-rank:
   without centering.
 
 ## SAE latents (Gemma Scope 2 16k l0_medium; top-5 per word, near-zero on all 50 sentences by construction)
+> 2026-07-10: selection v2 (contrastive, non-circular exclusion) exists alongside
+> this — see `notes/latents_v2.md`. Numbers below are v1 and not comparable to v2.
 Selected-latent summed activation on response tokens (mean over pairs):
 
 | layer | think | dont_think | no_mention |

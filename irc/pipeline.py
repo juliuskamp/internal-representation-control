@@ -230,38 +230,78 @@ def load_saes(sae_layers: list[int], device: str = "cuda", total_timeout: float 
 
 
 @torch.no_grad()
+def _sae_feats(
+    model, tokenizer, saes: dict, sae_layers: list[int], text: str, word: str | None = None
+) -> dict[int, torch.Tensor]:
+    """SAE features per layer for a chat-templated prompt; if `word` is given,
+    only the word's own token positions (avoids selecting latents for the
+    template phrasing), else all positions with BOS excluded."""
+    if word is None:
+        ids = chat_ids(tokenizer, text)
+        span = slice(1, None)  # BOS excluded
+    else:
+        full = tokenizer.apply_chat_template(
+            [{"role": "user", "content": text}],
+            add_generation_prompt=True, tokenize=False,
+        )
+        ids = tokenizer(full, return_tensors="pt", add_special_tokens=False)[
+            "input_ids"
+        ].to(model.device)
+        span = _word_token_span(tokenizer, ids[0], full, word)
+    with ResidualCapture(model, sae_layers) as cap:
+        model(ids)
+    return {
+        l: saes[l].encode(cap.acts[l][0, span].to("cuda", saes[l].dtype))
+        for l in sae_layers
+    }  # (T, d_sae) each
+
+
+@torch.no_grad()
+def _word_template_mean(
+    model, tokenizer, saes: dict, sae_layers: list[int], word: str
+) -> dict[int, torch.Tensor]:
+    """Per layer: mean SAE activation over the word's own token span, averaged
+    over the 4 templates — the `concept_mean` statistic (same in v1 and v2)."""
+    w = word.lower()
+    sums = {l: None for l in sae_layers}
+    for t in WORD_TEMPLATES_V1:
+        f = _sae_feats(model, tokenizer, saes, sae_layers, t.format(word=w), word=w)
+        for l in sae_layers:
+            m = f[l].mean(dim=0)
+            sums[l] = m if sums[l] is None else sums[l] + m
+    return {l: (sums[l] / len(WORD_TEMPLATES_V1)).float().cpu() for l in sae_layers}
+
+
+@torch.no_grad()
 def select_latents(
-    model, tokenizer, words: list[str], sae_layers: list[int], topk: int, neuronpedia: bool
+    model, tokenizer, words: list[str], sae_layers: list[int], topk: int,
+    neuronpedia: bool, version: str = "v1",
 ) -> Path:
-    """Per word and SAE layer: latents with high activation on concept texts and
-    near-zero max activation on the 50 experiment sentences."""
-    out_dir = ARTIFACTS / "latents_v1"
+    """Per word and SAE layer: select concept-selective latents.
+
+    v1 — rank by raw concept_mean (word-token-span activation across the 4
+    templates); exclude latents with non-negligible max activation on the 50
+    experiment sentences.
+    v2 — rank by concept_mean minus the mean of the same statistic over the 99
+    paper BASELINE words (contrastive, kills generic/template latents); exclude
+    on the 100 CONTROL words' template prompts (all tokens, BOS excluded)
+    instead of the experiment sentences, which selection never sees.
+    """
+    if version not in ("v1", "v2"):
+        raise ValueError(f"unknown latents version {version!r}")
+    out_dir = ARTIFACTS / f"latents_{version}"
     out_dir.mkdir(parents=True, exist_ok=True)
     saes = load_saes(sae_layers)
     np_cache_path = ARTIFACTS / "neuronpedia_cache.json"
     np_cache = json.loads(np_cache_path.read_text()) if np_cache_path.exists() else {}
+    if version == "v2":
+        return _select_latents_v2(
+            model, tokenizer, saes, out_dir, words, sae_layers, topk,
+            neuronpedia, np_cache, np_cache_path,
+        )
 
     def feats(text: str, word: str | None = None) -> dict[int, torch.Tensor]:
-        """SAE features per layer; if `word` is given, only the word's own token
-        positions (avoids selecting latents for the template phrasing)."""
-        if word is None:
-            ids = chat_ids(tokenizer, text)
-            span = slice(1, None)  # BOS excluded
-        else:
-            full = tokenizer.apply_chat_template(
-                [{"role": "user", "content": text}],
-                add_generation_prompt=True, tokenize=False,
-            )
-            ids = tokenizer(full, return_tensors="pt", add_special_tokens=False)[
-                "input_ids"
-            ].to(model.device)
-            span = _word_token_span(tokenizer, ids[0], full, word)
-        with ResidualCapture(model, sae_layers) as cap:
-            model(ids)
-        return {
-            l: saes[l].encode(cap.acts[l][0, span].to("cuda", saes[l].dtype))
-            for l in sae_layers
-        }  # (T, d_sae) each
+        return _sae_feats(model, tokenizer, saes, sae_layers, text, word)
 
     base_path = out_dir / "_baseline_max.pt"
     if base_path.exists():
@@ -276,21 +316,14 @@ def select_latents(
                 baseline_max[l] = m if baseline_max[l] is None else torch.maximum(baseline_max[l], m)
         torch.save(baseline_max, base_path)
 
-    templates = WORD_TEMPLATES_V1  # [0] is "Tell me about {word}."
     for wi, word in enumerate(words):
         path = out_dir / f"{word}.json"
         if path.exists():
             continue
-        w = word.lower()
-        sums = {l: None for l in sae_layers}
-        for t in templates:
-            f = feats(t.format(word=w), word=w)
-            for l in sae_layers:
-                m = f[l].mean(dim=0)
-                sums[l] = m if sums[l] is None else sums[l] + m
+        concept_means = _word_template_mean(model, tokenizer, saes, sae_layers, word)
         entry = {"word": word, "sae_release": SAE_RELEASE, "layers": {}}
         for l in sae_layers:
-            concept_mean = (sums[l] / len(templates)).float().cpu()
+            concept_mean = concept_means[l]
             bmax = baseline_max[l].float().cpu()
             eligible = bmax < 0.1 * concept_mean.clamp(min=1e-6)
             score = torch.where(eligible, concept_mean, torch.zeros_like(concept_mean))
@@ -311,6 +344,97 @@ def select_latents(
         path.write_text(json.dumps(entry, indent=1))
         if (wi + 1) % 10 == 0:
             print(f"  [latents] {wi + 1}/{len(words)}")
+    return out_dir
+
+
+@torch.no_grad()
+def _select_latents_v2(
+    model, tokenizer, saes: dict, out_dir: Path, words: list[str],
+    sae_layers: list[int], topk: int, neuronpedia: bool,
+    np_cache: dict, np_cache_path: Path,
+) -> Path:
+    """v2 selection body (see select_latents). The 50 experiment sentences are
+    never used here — the no_mention floor in measurement stays an empirical
+    result rather than holding by construction."""
+    # Per-word template statistic, cached incrementally (concept + baseline words).
+    means_path = out_dir / "_word_template_means.pt"
+    word_means: dict = torch.load(means_path) if means_path.exists() else {}
+    todo = [w for w in dict.fromkeys(list(words) + BASELINE_WORDS_PAPER)
+            if w not in word_means]
+    if todo:
+        print(f"[latents v2] template means for {len(todo)} words "
+              f"({len(word_means)} cached)")
+        for i, w in enumerate(todo):
+            word_means[w] = _word_template_mean(model, tokenizer, saes, sae_layers, w)
+            if (i + 1) % 10 == 0 or i + 1 == len(todo):
+                torch.save(word_means, means_path)
+                print(f"  [latents v2] means {i + 1}/{len(todo)}")
+
+    # Exclusion stat: max over ALL token positions (BOS excluded) of the 100
+    # control words' template prompts — all-token on purpose, so latents firing
+    # on the template phrasing itself get excluded too.
+    ctrl_path = out_dir / "_control_max.pt"
+    if ctrl_path.exists():
+        control_max = torch.load(ctrl_path)
+    else:
+        print(f"[latents v2] control max over {len(CONTROL_WORDS_PAPER)} words "
+              f"x {len(WORD_TEMPLATES_V1)} templates (all tokens)")
+        control_max = {l: None for l in sae_layers}
+        for i, w in enumerate(CONTROL_WORDS_PAPER):
+            for t in WORD_TEMPLATES_V1:
+                f = _sae_feats(model, tokenizer, saes, sae_layers,
+                               t.format(word=w.lower()))
+                for l in sae_layers:
+                    m = f[l].max(dim=0).values
+                    control_max[l] = (m if control_max[l] is None
+                                      else torch.maximum(control_max[l], m))
+            if (i + 1) % 25 == 0:
+                print(f"  [latents v2] control {i + 1}/{len(CONTROL_WORDS_PAPER)}")
+        control_max = {l: v.float().cpu() for l, v in control_max.items()}
+        torch.save(control_max, ctrl_path)
+
+    baseline_mean = {
+        l: torch.stack([word_means[b][l] for b in BASELINE_WORDS_PAPER]).mean(dim=0)
+        for l in sae_layers
+    }
+
+    for wi, word in enumerate(words):
+        path = out_dir / f"{word}.json"
+        if path.exists():
+            continue
+        entry = {
+            "word": word,
+            "sae_release": SAE_RELEASE,
+            "selection": "v2",  # contrastive score, control-word exclusion
+            "layers": {},
+        }
+        for l in sae_layers:
+            cm = word_means[word][l]
+            bwm = baseline_mean[l]
+            cmax = control_max[l]
+            # Same threshold form as v1, referenced to raw concept_mean.
+            eligible = cmax < 0.1 * cm.clamp(min=1e-6)
+            contrast = cm - bwm
+            score = torch.where(eligible, contrast, torch.zeros_like(contrast))
+            top = torch.topk(score, topk)
+            latents = []
+            for idx, val in zip(top.indices.tolist(), top.values.tolist()):
+                if val <= 0:
+                    continue
+                label = (_neuronpedia_label(l, idx, np_cache, np_cache_path)
+                         if neuronpedia else "")
+                latents.append({
+                    "latent": idx,
+                    "concept_mean": round(float(cm[idx]), 3),
+                    "contrast_score": round(val, 3),
+                    "baseline_word_mean": round(float(bwm[idx]), 3),
+                    "baseline_max": round(float(cmax[idx]), 3),
+                    "label": label,
+                })
+            entry["layers"][str(l)] = latents
+        path.write_text(json.dumps(entry, indent=1))
+        if (wi + 1) % 10 == 0:
+            print(f"  [latents v2] {wi + 1}/{len(words)}")
     return out_dir
 
 
@@ -351,6 +475,7 @@ def measure(
     variants: list[str],
     sae_layers: list[int],
     device: str = "cuda",
+    latents_version: str = "v1",
 ) -> None:
     import pandas as pd
 
@@ -366,7 +491,8 @@ def measure(
             return None
         return torch.load(run_dir / rec["acts_file"]).float().to(device)
 
-    # ---- concept vectors
+    # ---- concept vectors (independent of latents_version; pass variants=[]
+    # to skip, e.g. when re-measuring only under a new latent set)
     rows = []
     for variant in variants:
         bank = load_vector_bank(variant, device)
@@ -399,12 +525,13 @@ def measure(
                         "null_q95": float(null_mean[layer].quantile(0.95)),
                         "null_q05": float(null_mean[layer].quantile(0.05)),
                     })
-    df = pd.DataFrame(rows)
-    df.to_parquet(results_dir / "concept_cosines.parquet")
-    print(f"[measure] concept cosines: {len(df)} rows -> results/concept_cosines.parquet")
+    if variants:
+        df = pd.DataFrame(rows)
+        df.to_parquet(results_dir / "concept_cosines.parquet")
+        print(f"[measure] concept cosines: {len(df)} rows -> results/concept_cosines.parquet")
 
     # ---- SAE latents
-    latents_dir = ARTIFACTS / "latents_v1"
+    latents_dir = ARTIFACTS / f"latents_{latents_version}"
     saes = load_saes(sae_layers, device=device)
     sae_rows = []
     for word, si in pairs:
@@ -431,8 +558,12 @@ def measure(
                     "frac_tokens_active": float((f_sel.max(dim=1).values > 0).float().mean()),
                 })
     sdf = pd.DataFrame(sae_rows)
-    sdf.to_parquet(results_dir / "sae_latents.parquet")
-    print(f"[measure] SAE latents: {len(sdf)} rows -> results/sae_latents.parquet")
+    # v1 keeps its historical filename; other versions get their own file so
+    # re-measuring under a new latent set never clobbers earlier results.
+    sae_name = ("sae_latents.parquet" if latents_version == "v1"
+                else f"sae_latents_{latents_version}.parquet")
+    sdf.to_parquet(results_dir / sae_name)
+    print(f"[measure] SAE latents ({latents_version}): {len(sdf)} rows -> results/{sae_name}")
 
     flagged = [r for r in records.values() if not r["exact_match"]]
     summary = {
