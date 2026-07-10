@@ -6,6 +6,10 @@
   40,
   53
  ],
+ "sae_versions": [
+  "v1",
+  "v2"
+ ],
  "n_layers": 62,
  "variants": [
   "paper",
