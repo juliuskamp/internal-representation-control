@@ -55,7 +55,8 @@ header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
   font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
   color: var(--ink-2);
 }
-select, input[type=range] { accent-color: var(--accent); }
+select, input[type=range], input[type=checkbox] { accent-color: var(--accent); }
+.ctl input[type=checkbox] { width: 17px; height: 17px; margin: 6px 0; }
 select {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
@@ -188,6 +189,9 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
       </select></div>
     <div class="ctl layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
       <input type="range" id="layer" min="0" max="61" step="1" value="40"></div>
+    <div class="ctl"><label for="summary">Summary</label>
+      <input type="checkbox" id="summary" checked
+             title="Mean ±1 std over the response tokens, per condition"></div>
   </div>
   <div class="status" id="status" role="status"></div>
 
@@ -226,8 +230,8 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
 
 
 <!-- URL query params: current selection is mirrored to word=, sent=, meas=,
-     base=, layer=, agg=, table=1 (via syncURL(), replaceState so it doesn't
-     spam history) — copy the URL bar to share the exact view. Separately,
+     base=, layer=, agg=, summary=0, table=1 (via syncURL(), replaceState so it
+     doesn't spam history) — copy the URL bar to share the exact view. Separately,
      only_word=, only_sent=, only_meas=, only_base= (comma-separated) narrow
      which options are offered at all, for sharing a subset of the data. -->
 <script>
@@ -236,17 +240,32 @@ if (new URLSearchParams(location.search).has("embed")) {
 }
 
 const COND = [
-  { id: "think", label: "think", cssVar: "--think" },
-  { id: "dont_think", label: "don't think", cssVar: "--dont" },
-  { id: "no_mention", label: "no mention", cssVar: "--nomen" },
+  { id: "think", label: "think", cssVar: "--think", shape: "circle" },
+  { id: "dont_think", label: "don't think", cssVar: "--dont", shape: "square" },
+  { id: "no_mention", label: "no mention", cssVar: "--nomen", shape: "triangle" },
 ];
 const $ = (id) => document.getElementById(id);
 const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
+const svgEl = (tag, at) => {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in at) e.setAttribute(k, at[k]);
+  return e;
+};
+// per-condition point marker (circle / square / triangle), also used in the legend
+function markEl(shape, cx, cy, color, s = 3) {
+  if (shape === "square")
+    return svgEl("rect", { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, fill: color });
+  if (shape === "triangle")
+    return svgEl("polygon", { fill: color,
+      points: `${cx},${cy - 1.3 * s} ${cx - 1.2 * s},${cy + s} ${cx + 1.2 * s},${cy + s}` });
+  return svgEl("circle", { cx, cy, r: s, fill: color });
+}
+
 let INDEX = null, SHARED = null, SI_INDEX = null;
 const CHUNKS = {};  // word -> {word, slots}
 const state = { word: null, si: null, meas: "word_tokens", base: "band", layer: 40, saeLayer: 40,
-  saeAgg: "sum", latentOff: new Set() };  // latentOff keys: "word|layer|latent"
+  saeAgg: "sum", summary: true, latentOff: new Set() };  // latentOff keys: "word|layer|latent"
 
 // URL query params, split into two purposes:
 //  - restrict.* narrows which options are offered at all (for sharing a
@@ -285,6 +304,7 @@ function syncURL() {
   p.set("base", state.base);
   p.set("layer", String(isSAE() ? state.saeLayer : isNLA() ? INDEX.nla_layer : state.layer));
   if (isSAE()) p.set("agg", state.saeAgg); else p.delete("agg");
+  if (!state.summary) p.set("summary", "0"); else p.delete("summary");
   if (!$("tablewrap").hidden) p.set("table", "1"); else p.delete("table");
   history.replaceState(null, "", `${location.pathname}?${p.toString()}${location.hash}`);
 }
@@ -464,10 +484,13 @@ function render() {
   for (const c of conds) {
     if (!c.vals && !c.isBaseCond) continue;
     const it = document.createElement("span"); it.className = "it";
-    const sw = document.createElement("span");
-    sw.className = "sw" + (c.isBaseCond ? " dash" : "");
-    if (!c.isBaseCond) sw.style.background = cssv(c.cssVar);
-    it.appendChild(sw);
+    const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+    const sv = svgEl("svg", { width: 24, height: 12 });
+    const ln = svgEl("line", { x1: 0, x2: 24, y1: 6, y2: 6, stroke: color, "stroke-width": 2 });
+    if (c.isBaseCond) ln.setAttribute("stroke-dasharray", "4 3");
+    sv.appendChild(ln);
+    sv.appendChild(markEl(c.shape, 12, 6, color));
+    it.appendChild(sv);
     it.appendChild(document.createTextNode(c.isBaseCond ? `${c.label} (baseline)` : c.label));
     lg.appendChild(it);
   }
@@ -503,8 +526,25 @@ function render() {
 
 function drawChart(tokens, conds) {
   const svg = $("chart");
-  const W = 1020, H = 430, m = { t: 16, r: 120, b: 86, l: 58 };
-  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const H = 430, m = { t: 16, r: 28, b: 86, l: 58 };
+
+  // per-condition mean ± std over the response tokens, for the summary panel
+  const summ = [];
+  if (state.summary) {
+    for (const c of conds) {
+      const xs = (c.vals || []).filter((v) => v != null);
+      if (!xs.length) continue;
+      const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+      const sd = Math.sqrt(xs.reduce((a, v) => a + (v - mean) ** 2, 0) / xs.length);
+      summ.push({ c, mean, sd });
+    }
+  }
+  const sw = summ.length ? 50 : 0;  // summary panel (36) + gap
+  const pw = 36;
+  const W = 1020 + sw;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const iw = 1020 - m.l - m.r, ih = H - m.t - m.b;
+  const px0 = m.l + iw + 14;  // summary panel: extra separated column at the end
   const n = tokens.length;
   const x = (i) => m.l + (n === 1 ? iw / 2 : (i * iw) / (n - 1));
 
@@ -512,16 +552,13 @@ function drawChart(tokens, conds) {
   const consider = (v) => { if (v == null) return; lo = Math.min(lo, v); hi = Math.max(hi, v); };
   conds.forEach((c) => (c.vals || []).forEach(consider));
   conds.forEach((c) => { if (c.band) { c.band.lo.forEach(consider); c.band.hi.forEach(consider); } });
+  summ.forEach(({ mean, sd }) => { consider(mean - sd); consider(mean + sd); });
   if (hi === lo) hi = lo + 1;
   const pad = (hi - lo) * 0.08;
   lo -= pad; hi += pad;
   const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
 
-  const el = (tag, at) => {
-    const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (const k in at) e.setAttribute(k, at[k]);
-    return e;
-  };
+  const el = svgEl;
   svg.innerHTML = "";
 
   // y grid + ticks
@@ -531,12 +568,37 @@ function drawChart(tokens, conds) {
   for (const v of tickVals) {
     const yy = y(v);
     svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "grid" }));
+    if (sw) svg.appendChild(el("line", { x1: px0, x2: px0 + pw, y1: yy, y2: yy, class: "grid" }));
     const t = el("text", { x: m.l - 8, y: yy + 4, "text-anchor": "end", "font-size": 11 });
     t.textContent = Math.abs(hi - lo) < 5 ? v.toFixed(2) : v.toFixed(0);
     svg.appendChild(t);
   }
   if (lo < 0 && hi > 0) {
     svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: y(0), y2: y(0), class: "zero" }));
+    if (sw) svg.appendChild(el("line", { x1: px0, x2: px0 + pw, y1: y(0), y2: y(0), class: "zero" }));
+  }
+
+  // summary panel: mean dot + ±1 std whisker per condition, all at one x
+  // position with ~point-width offsets
+  if (summ.length) {
+    const k = summ.length;
+    const sx = (i) => px0 + pw / 2 + (i - (k - 1) / 2) * 5;
+    summ.forEach(({ c, mean, sd }, i) => {
+      const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+      svg.appendChild(el("line", { x1: sx(i), x2: sx(i), y1: y(mean - sd),
+        y2: y(mean + sd), stroke: color, "stroke-width": 1.5 }));
+      for (const yy of [y(mean - sd), y(mean + sd)]) {
+        svg.appendChild(el("line", { x1: sx(i) - 3, x2: sx(i) + 3, y1: yy, y2: yy,
+          stroke: color, "stroke-width": 1.5 }));
+      }
+      svg.appendChild(markEl(c.shape, sx(i), y(mean), color));
+    });
+    for (const [j, line] of ["mean", "±1 std"].entries()) {
+      const t = el("text", { x: px0 + pw / 2, y: m.t + ih + 16 + j * 13,
+        "font-size": 10, "text-anchor": "middle" });
+      t.textContent = line;
+      svg.appendChild(t);
+    }
   }
   // y axis label
   const yl = el("text", { x: 14, y: m.t + ih / 2, "font-size": 11.5,
@@ -569,7 +631,6 @@ function drawChart(tokens, conds) {
   });
 
   // series
-  const labelYs = [];  // stagger end labels when lines converge
   for (const c of conds) {
     if (!c.vals) continue;
     const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
@@ -586,20 +647,8 @@ function drawChart(tokens, conds) {
     }));
     c.vals.forEach((v, i) => {
       if (v == null) return;
-      svg.appendChild(el("circle", { cx: x(i), cy: y(v), r: 3, fill: color }));
+      svg.appendChild(markEl(c.shape, x(i), y(v), color));
     });
-    // direct label at line end (last non-null point)
-    const lastV = c.vals.reduce((a, v) => (v == null ? a : v), null);
-    if (lastV == null) continue;
-    let ly = y(lastV) + 4;
-    while (labelYs.some((p) => Math.abs(p - ly) < 14)) ly += 14;
-    labelYs.push(ly);
-    const t = el("text", {
-      x: m.l + iw + 8, y: ly, "font-size": 12, fill: color,
-    });
-    t.textContent = c.isBaseCond ? `${c.label} (base)` : c.label;
-    t.style.fill = color;
-    svg.appendChild(t);
   }
 
   // hover layer: one hit column per token
@@ -609,8 +658,10 @@ function drawChart(tokens, conds) {
   svg.appendChild(guide);
   const half = n > 1 ? (x(1) - x(0)) / 2 : iw / 2;
   tokens.forEach((tok, i) => {
+    // clipped to the plot area so the last column doesn't cover the summary panel
+    const xL = Math.max(m.l, x(i) - half), xR = Math.min(m.l + iw, x(i) + half);
     const hit = el("rect", {
-      x: x(i) - half, y: m.t, width: half * 2, height: ih, fill: "transparent",
+      x: xL, y: m.t, width: xR - xL, height: ih, fill: "transparent",
     });
     hit.addEventListener("mousemove", (ev) => {
       guide.setAttribute("x1", x(i)); guide.setAttribute("x2", x(i));
@@ -634,6 +685,31 @@ function drawChart(tokens, conds) {
     });
     svg.appendChild(hit);
   });
+
+  // hover tooltip for the summary panel
+  if (summ.length) {
+    const cx = px0 + pw / 2;
+    const hit = el("rect", { x: px0, y: m.t, width: pw, height: ih, fill: "transparent" });
+    hit.addEventListener("mousemove", (ev) => {
+      guide.setAttribute("x1", cx); guide.setAttribute("x2", cx);
+      guide.setAttribute("visibility", "visible");
+      let html = `<div class="tt">mean ±1 std</div>`;
+      for (const { c, mean, sd } of summ) {
+        const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+        html += `<div class="row"><span style="color:${color}">${c.label}</span><b>${fmtVal(mean)} ± ${fmtVal(sd)}</b></div>`;
+      }
+      tip.innerHTML = html;
+      tip.style.display = "block";
+      const box = svg.getBoundingClientRect();
+      const px = (cx / W) * box.width;
+      tip.style.left = Math.min(px + 14, box.width - 190) + "px";
+      tip.style.top = Math.max(ev.clientY - box.top - 40, 6) + "px";
+    });
+    hit.addEventListener("mouseleave", () => {
+      tip.style.display = "none"; guide.setAttribute("visibility", "hidden");
+    });
+    svg.appendChild(hit);
+  }
 }
 
 function renderLatents(slot) {
@@ -858,6 +934,7 @@ async function init() {
   }
   const urlAgg = QP.get("agg");
   if (urlAgg && ["sum", "mean", "max"].includes(urlAgg)) { state.saeAgg = urlAgg; $("agg").value = urlAgg; }
+  if (QP.get("summary") === "0") { state.summary = false; $("summary").checked = false; }
 
   const urlSent = QP.get("sent");
   if (urlSent != null) state.si = urlSent;
@@ -882,6 +959,7 @@ async function init() {
   $("meas").addEventListener("change", (e) => { state.meas = e.target.value; syncControls(); render(); });
   $("base").addEventListener("change", (e) => { state.base = e.target.value; render(); });
   $("agg").addEventListener("change", (e) => { state.saeAgg = e.target.value; render(); });
+  $("summary").addEventListener("change", (e) => { state.summary = e.target.checked; render(); });
   $("layer").addEventListener("input", (e) => {
     if (isSAE()) state.saeLayer = INDEX.sae_layers[+e.target.value];
     else state.layer = +e.target.value;

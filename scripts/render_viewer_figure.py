@@ -51,11 +51,12 @@ THEMES = {
     },
 }
 COND = [("think", "think"), ("dont_think", "don't think"), ("no_mention", "no mention")]
+MARKERS = {"think": "o", "dont_think": "s", "no_mention": "^"}
 MONO = "DejaVu Sans Mono"
 
 # Viewer chart geometry (px); fonts converted at 1px = 0.75pt.
 W, H = 1020, 430
-MARGIN = {"t": 16, "r": 120, "b": 86, "l": 58}
+MARGIN = {"t": 16, "r": 28, "b": 86, "l": 58}
 PT = 0.75
 
 
@@ -86,6 +87,9 @@ class Config:
     dpi: int = 200
     transparent: bool = False
     """Transparent background instead of the theme surface color."""
+    summary: bool = True
+    """Summary panel left of the chart: per-condition mean over the response
+    tokens as a bar, ±1 std as an error bar (--no-summary to hide)."""
 
 
 def load_gz(path: Path) -> dict:
@@ -165,9 +169,21 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
     h = H - MARGIN["t"] + top
     iw, ih = W - MARGIN["l"] - MARGIN["r"], H - MARGIN["t"] - MARGIN["b"]
 
-    fig = plt.figure(figsize=(W / 96, h / 96), dpi=cfg.dpi)
+    # per-condition mean ± std over the response tokens, for the summary panel
+    summ = []
+    if cfg.summary:
+        for c in conds:
+            if c["vals"] is None:
+                continue
+            v = np.array([np.nan if x is None else x for x in c["vals"]], dtype=float)
+            if not np.isnan(v).all():
+                summ.append((c, float(np.nanmean(v)), float(np.nanstd(v))))
+    sw = 50 if summ else 0  # summary panel (36 px) + gap
+    tw = W + sw
+
+    fig = plt.figure(figsize=(tw / 96, h / 96), dpi=cfg.dpi)
     fig.patch.set_facecolor("none" if cfg.transparent else pal["surface"])
-    ax = fig.add_axes([MARGIN["l"] / W, MARGIN["b"] / h, iw / W, ih / h])
+    ax = fig.add_axes([MARGIN["l"] / tw, MARGIN["b"] / h, iw / tw, ih / h])
     ax.set_facecolor("none")
 
     # y range like the viewer: anchored to include 0, 8% padding
@@ -179,6 +195,8 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
         if c["band"] is not None:
             lo = min(lo, c["band"][0].min())
             hi = max(hi, c["band"][1].max())
+    for _, m, s in summ:
+        lo, hi = min(lo, m - s), max(hi, m + s)
     if hi == lo:
         hi = lo + 1
     pad = (hi - lo) * 0.08
@@ -196,7 +214,33 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
     ax.set_axisbelow(True)
     if lo < 0 < hi:
         ax.axhline(0, color=pal["ink2"], linewidth=0.75)
+
     ax.set_ylabel(y_label(cfg), fontsize=11.5 * PT, color=pal["ink2"], labelpad=8)
+
+    if summ:
+        # summary panel: an extra, separated "token" column at the right end
+        # of the chart, on the same y axis as the lines
+        sax = fig.add_axes([(MARGIN["l"] + iw + 14) / tw, MARGIN["b"] / h,
+                            36 / tw, ih / h], sharey=ax)
+        sax.set_facecolor("none")
+        for side in sax.spines.values():
+            side.set_visible(False)
+        sax.tick_params(axis="y", labelleft=False, length=0)
+        sax.grid(axis="y", color=pal["line"], linewidth=0.75)
+        sax.set_axisbelow(True)
+        if lo < 0 < hi:
+            sax.axhline(0, color=pal["ink2"], linewidth=0.75)
+        sax.set_xlim(-0.5, 0.5)
+        sax.set_xticks([])
+        sax.set_xlabel("mean\n±1 std", fontsize=10 * PT, color=pal["ink2"])
+        k = len(summ)
+        for i, (c, m, s) in enumerate(summ):
+            color = pal["null"] if c["is_base"] else pal[c["id"]]
+            xi = (i - (k - 1) / 2) * (5 / 36)  # ~point-width x offsets
+            sax.errorbar(xi, m, yerr=s, color=color, linewidth=2 * PT,
+                         capsize=3, capthick=2 * PT)
+            sax.plot(xi, m, linestyle="none", marker=MARKERS[c["id"]],
+                     color=color, markersize=4.5, clip_on=False)
 
     ax.set_xticks(range(n), tokens, rotation=38, ha="right",
                   rotation_mode="anchor", fontsize=12 * PT,
@@ -209,8 +253,6 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
             ax.fill_between(x, c["band"][0], c["band"][1],
                             color=pal[c["id"]], alpha=0.18, linewidth=0)
 
-    px = ih / (hi - lo)  # data units <-> px, for label staggering
-    label_ys: list[float] = []
     for c in conds:
         if c["vals"] is None:
             continue
@@ -219,18 +261,8 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
         ax.plot(x, vals, color=color, linewidth=2 * PT, solid_capstyle="round",
                 solid_joinstyle="round", clip_on=False,
                 linestyle=(0, (3.75, 3)) if c["is_base"] else "-")
-        ax.plot(x, vals, "o", color=color, markersize=4.5, clip_on=False)
-        last = next((v for v in vals[::-1] if not np.isnan(v)), None)
-        if last is None:
-            continue
-        ly = last - 4 / px
-        while any(abs(p - ly) < 14 / px for p in label_ys):
-            ly -= 14 / px
-        label_ys.append(ly)
-        ax.annotate(f"{c['label']} (base)" if c["is_base"] else c["label"],
-                    (n - 1, ly), xytext=(8, 0), textcoords="offset points",
-                    fontsize=12 * PT, color=color, va="center",
-                    annotation_clip=False)
+        ax.plot(x, vals, linestyle="none", marker=MARKERS[c["id"]], color=color,
+                markersize=4.5, clip_on=False)
 
     # legend row above the chart, like the viewer's
     handles, labels = [], []
@@ -239,25 +271,27 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
             continue
         if c["is_base"]:
             handles.append(Line2D([], [], color=pal["null"], linewidth=2 * PT,
-                                  linestyle=(0, (3.75, 3))))
+                                  linestyle=(0, (3.75, 3)),
+                                  marker=MARKERS[c["id"]], markersize=4.5))
             labels.append(f"{c['label']} (baseline)")
         else:
-            handles.append(Line2D([], [], color=pal[c["id"]], linewidth=2 * PT))
+            handles.append(Line2D([], [], color=pal[c["id"]], linewidth=2 * PT,
+                                  marker=MARKERS[c["id"]], markersize=4.5))
             labels.append(c["label"])
     for c in conds:
         if c["band"] is not None:
             handles.append(Patch(facecolor=pal[c["id"]], alpha=0.5, linewidth=0))
             labels.append(f"{c['label']} baseline ±1 std")
     fig.legend(handles, labels, loc="upper left", frameon=False, ncol=len(handles),
-               bbox_to_anchor=(MARGIN["l"] / W, 1 - (MARGIN["t"] + (24 if cfg.title else 0)) / h),
+               bbox_to_anchor=(MARGIN["l"] / tw, 1 - (MARGIN["t"] + (24 if cfg.title else 0)) / h),
                borderaxespad=0, fontsize=13 * PT, labelcolor=pal["ink2"],
                handlelength=1.4, columnspacing=1.6)
     if cfg.title:
-        fig.text(MARGIN["l"] / W, 1 - MARGIN["t"] / h, cfg.title,
+        fig.text(MARGIN["l"] / tw, 1 - MARGIN["t"] / h, cfg.title,
                  fontsize=15 * PT, color=pal["ink"], va="top", fontweight="bold")
     excluded = [c for c in conds if c["excluded"]]
     if excluded:
-        fig.text(1 - 14 / W, 1 - MARGIN["t"] / h,
+        fig.text(1 - 14 / tw, 1 - MARGIN["t"] / h,
                  " · ".join(f"{c['label']}: excluded (non-exact)" for c in excluded),
                  fontsize=11 * PT, color=pal["bad"], va="top", ha="right")
 
