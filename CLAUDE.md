@@ -17,8 +17,8 @@ uv run python scripts/run_pipeline.py --run-id run1-core
 uv run python scripts/run_pipeline.py --run-id run1-core --stages generate measure
 uv run python scripts/run_pipeline.py --run-id run1-core --words Dust Oceans --sentences-per-word 5
 
-# Figures and interactive viewer for a finished run
-uv run python scripts/plot_results.py --run-id run1-core
+# Interactive viewer for a finished run (static image export of a viewer
+# chart: scripts/render_viewer_figure.py)
 uv run python scripts/export_viz_data.py --run-id run1-core  # writes docs/data/
 python -m http.server -d docs                                # view at localhost:8000
 

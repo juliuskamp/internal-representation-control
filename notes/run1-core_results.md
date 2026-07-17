@@ -2,7 +2,6 @@
 
 Config: `artifacts/runs/run1-core/config.json` — 50 paper concept words x 2 sentences
 (seed 0), conditions think / dont_think / no_mention, greedy decoding, bf16.
-Figures: `artifacts/runs/run1-core/results/figures/`.
 
 ## Compliance (exact-output check)
 243 generations, **35 flagged non-exact** (33 think, 2 dont_think) and excluded →
