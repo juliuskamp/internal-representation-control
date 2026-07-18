@@ -1,0 +1,344 @@
+<!doctype html>
+<!-- Forest plot: per-word paired delta vs the no-mention condition at one
+     residual layer (slider), dot = sentence-mean, whisker = ±1 std across
+     sentences. Data from data/index.json and data/agg/words.json.gz, written
+     by scripts/export_agg_data.py. Does NOT work over file:// — serve it:
+     python -m http.server -d docs. ?embed=1 hides the page chrome. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Per-word effect — forest plot</title>
+<style>
+/* Palette mirrors docs/index.html (and scripts/render_viewer_figure.py). */
+:root {
+  color-scheme: light dark;
+  --surface:      light-dark(#fbfbf9, #1a1a19);
+  --surface-2:    light-dark(#f1f0ec, #242422);
+  --ink:          light-dark(#171614, #f2f1ec);
+  --ink-2:        light-dark(#55534d, #c3c2b7);
+  --line:         light-dark(#e2e1db, #35342f);
+  --accent:       light-dark(#2a78d6, #3987e5);
+  --think:        light-dark(#2a78d6, #3987e5);
+  --dont:         light-dark(#eda100, #c98500);
+  --nomen:        light-dark(#1baf7a, #199e70);
+  --null:         light-dark(#b9b7b0, #55534d);
+  --chip-bad-ink: light-dark(#9c2a29, #e8908f);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface); color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
+.embed .wrap { padding: 12px 12px 24px; }
+.embed header { display: none; }
+header h1 {
+  font-family: Charter, Georgia, "Times New Roman", serif;
+  font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
+}
+header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
+header a { color: var(--accent); }
+.controls {
+  display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
+  padding: 14px 16px; background: var(--surface-2); border-radius: 10px;
+  margin-bottom: 8px;
+}
+.ctl { display: flex; flex-direction: column; gap: 4px; }
+.ctl label {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-2);
+}
+.ctl label .lv { color: var(--ink); text-transform: none; letter-spacing: 0; }
+select, input[type=checkbox], input[type=range] { accent-color: var(--accent); }
+.ctl input[type=checkbox] { width: 17px; height: 17px; margin: 6px 0; }
+.ctl input[type=range] { width: 220px; margin: 8px 0 5px; }
+select {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+  max-width: 380px;
+}
+select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.status { color: var(--ink-2); font-size: 12.5px; min-height: 1.2em; margin: 6px 2px 0; }
+.status.err { color: var(--chip-bad-ink); }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 2px 4px; font-size: 13px; color: var(--ink-2); }
+.legend .it { display: inline-flex; align-items: center; gap: 7px; }
+figure { margin: 0; }
+.chartbox { position: relative; }
+svg text { fill: var(--ink-2); font-family: system-ui, sans-serif; }
+svg text.word { fill: var(--ink); font-family: ui-monospace, Menlo, Consolas, monospace; }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .zero { stroke: var(--ink-2); stroke-width: 1; }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+  font-size: 12.5px; box-shadow: 0 3px 14px rgba(0,0,0,.14); display: none;
+  min-width: 210px; z-index: 3;
+}
+.tooltip .tt { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; margin-bottom: 4px; }
+.tooltip .row { display: flex; justify-content: space-between; gap: 14px; }
+.tooltip .row b { font-variant-numeric: tabular-nums; font-weight: 600; }
+footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Per-word effect at one layer</h1>
+    <p>For every concept word, the paired difference in concept-vector cosine
+    against the no-mention baseline at the selected residual layer: dot =
+    mean over that word&rsquo;s sentences (token-mean per sentence), whisker =
+    &plusmn;1 std across sentences. Other views:
+    <a href="index.html">single word</a> &middot;
+    <a href="aggregate.html">word-averaged</a> &middot;
+    <a href="layers.html">layer curves</a>.</p>
+  </header>
+
+  <div class="controls">
+    <div class="ctl"><label for="meas">Measurement</label>
+      <select id="meas">
+        <option value="word_tokens">Concept vector — word tokens</option>
+        <option value="paper">Concept vector — paper method</option>
+      </select></div>
+    <div class="ctl"><label for="sort">Sort</label>
+      <select id="sort">
+        <option value="think">By think Δ</option>
+        <option value="dont">By don’t-think Δ</option>
+        <option value="alpha">Alphabetical</option>
+      </select></div>
+    <div class="ctl"><label for="complete">Complete cases only</label>
+      <input type="checkbox" id="complete" checked
+             title="Per sentence, only keep it for a word when all three conditions are exact"></div>
+    <div class="ctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
+      <input type="range" id="layer" min="0" max="61" step="1" value="40"></div>
+  </div>
+  <div class="status" id="status" role="status"></div>
+
+  <div class="legend" id="legend"></div>
+  <figure>
+    <div class="chartbox">
+      <svg id="chart" width="100%" role="img"
+           aria-label="Per-word paired delta forest plot"></svg>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+  </figure>
+
+  <footer id="meta"></footer>
+</div>
+
+<script>
+if (new URLSearchParams(location.search).has("embed")) {
+  document.documentElement.classList.add("embed");
+}
+
+const COND = [
+  { id: "think", label: "think", cssVar: "--think", shape: "circle" },
+  { id: "dont_think", label: "don’t think", cssVar: "--dont", shape: "square" },
+];
+const $ = (id) => document.getElementById(id);
+const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const svgEl = (tag, at) => {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in at) e.setAttribute(k, at[k]);
+  return e;
+};
+function markEl(shape, cx, cy, color, s = 3.2) {
+  if (shape === "square")
+    return svgEl("rect", { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, fill: color });
+  return svgEl("circle", { cx, cy, r: s, fill: color });
+}
+
+let INDEX = null, DATA = null;
+const state = { meas: "word_tokens", complete: true, layer: 40, sort: "think" };
+const QP = new URLSearchParams(location.search);
+
+function syncURL() {
+  const p = new URLSearchParams(location.search);
+  p.set("meas", state.meas);
+  p.set("layer", state.layer);
+  if (state.sort !== "think") p.set("sort", state.sort); else p.delete("sort");
+  if (!state.complete) p.set("exact", "0"); else p.delete("exact");
+  history.replaceState(null, "", `${location.pathname}?${p.toString()}${location.hash}`);
+}
+
+function setStatus(msg, isErr = false) {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = "status" + (isErr ? " err" : "");
+}
+
+function rowData() {
+  // one row per word with, per condition, {v, sd, n} at the active layer
+  const vm = DATA[state.meas][state.complete ? "complete" : "all"];
+  const li = state.layer;
+  const rows = DATA.words.map((w, wi) => {
+    const r = { word: w };
+    for (const c of COND) {
+      const b = vm[c.id];
+      r[c.id] = b.mean[wi] ? { v: b.mean[wi][li], sd: b.std[wi][li], n: b.n[wi] } : null;
+    }
+    return r;
+  }).filter((r) => r.think || r.dont_think);
+  const key = state.sort === "dont" ? "dont_think" : "think";
+  if (state.sort === "alpha") rows.sort((a, b) => a.word.localeCompare(b.word));
+  else rows.sort((a, b) => ((b[key] ? b[key].v : -1e9) - (a[key] ? a[key].v : -1e9)));
+  return rows;
+}
+
+function render() {
+  const rows = rowData();
+
+  const lg = $("legend"); lg.innerHTML = "";
+  for (const c of COND) {
+    const it = document.createElement("span"); it.className = "it";
+    const color = cssv(c.cssVar);
+    const sv = svgEl("svg", { width: 24, height: 12 });
+    sv.appendChild(svgEl("line", { x1: 2, x2: 22, y1: 6, y2: 6, stroke: color, "stroke-width": 1.5 }));
+    sv.appendChild(markEl(c.shape, 12, 6, color));
+    it.appendChild(sv);
+    it.appendChild(document.createTextNode(`${c.label} − no mention`));
+    lg.appendChild(it);
+  }
+  const note = document.createElement("span"); note.className = "it";
+  note.textContent = "dot: mean over sentences · whisker: ±1 std";
+  lg.appendChild(note);
+
+  drawChart(rows);
+  syncURL();
+  $("layerval").textContent = state.layer;
+  $("meta").textContent =
+    `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · layer ${state.layer} of ${INDEX.n_layers - 1} · ` +
+    `paired per-word Δ vs no mention, token-mean per sentence · ` +
+    `${state.complete ? "complete cases (all three conditions exact per sentence)"
+      : "all sentences with exact completions for the pair"} · ` +
+    `concept vectors: ${state.meas === "paper" ? "paper method" : "word-token method"}`;
+}
+
+function drawChart(rows) {
+  const svg = $("chart");
+  const rowH = 16;
+  const m = { t: 10, r: 28, b: 42, l: 118 };
+  const W = 1020, H = m.t + rows.length * rowH + m.b;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const iw = W - m.l - m.r, ih = rows.length * rowH;
+
+  let lo = 0, hi = 0;
+  for (const r of rows) for (const c of COND) {
+    const d = r[c.id];
+    if (!d) continue;
+    lo = Math.min(lo, d.v - d.sd); hi = Math.max(hi, d.v + d.sd);
+  }
+  if (hi === lo) hi = lo + 1;
+  const pad = (hi - lo) * 0.05;
+  lo -= pad; hi += pad;
+  const x = (v) => m.l + ((v - lo) / (hi - lo)) * iw;
+  const y = (i) => m.t + i * rowH + rowH / 2;
+
+  svg.innerHTML = "";
+
+  const ticks = 6;
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + ((hi - lo) * i) / ticks;
+    svg.appendChild(svgEl("line", { x1: x(v), x2: x(v), y1: m.t, y2: m.t + ih, class: "grid" }));
+    const t = svgEl("text", { x: x(v), y: m.t + ih + 18, "text-anchor": "middle", "font-size": 11 });
+    t.textContent = v.toFixed(Math.abs(hi - lo) < 0.05 ? 3 : 2);
+    svg.appendChild(t);
+  }
+  if (lo < 0 && hi > 0) {
+    svg.appendChild(svgEl("line", { x1: x(0), x2: x(0), y1: m.t, y2: m.t + ih, class: "zero" }));
+  }
+  const xl = svgEl("text", { x: m.l + iw / 2, y: m.t + ih + 36, "text-anchor": "middle", "font-size": 11.5 });
+  xl.textContent = "Δ cosine with concept vector vs no mention";
+  svg.appendChild(xl);
+
+  const tip = $("tooltip");
+  rows.forEach((r, i) => {
+    const yy = y(i);
+    const wl = svgEl("text", { x: m.l - 8, y: yy + 3.5, "text-anchor": "end",
+      "font-size": 11, class: "word" });
+    wl.textContent = r.word;
+    svg.appendChild(wl);
+    for (const c of COND) {
+      const d = r[c.id];
+      if (!d) continue;
+      const color = cssv(c.cssVar);
+      // per-condition sub-row offset so whiskers don't overlap
+      const oy = c.id === "think" ? -2.5 : 2.5;
+      svg.appendChild(svgEl("line", { x1: x(d.v - d.sd), x2: x(d.v + d.sd),
+        y1: yy + oy, y2: yy + oy, stroke: color, "stroke-width": 1.5, opacity: 0.8 }));
+      svg.appendChild(markEl(c.shape, x(d.v), yy + oy, color, 3));
+    }
+    const hit = svgEl("rect", { x: 0, y: m.t + i * rowH, width: W, height: rowH,
+      fill: "transparent" });
+    hit.addEventListener("mousemove", (ev) => {
+      let html = `<div class="tt">${r.word} · layer ${state.layer}</div>`;
+      for (const c of COND) {
+        const d = r[c.id];
+        if (!d) continue;
+        html += `<div class="row"><span style="color:${cssv(c.cssVar)}">${c.label} Δ</span>` +
+          `<b>${d.v.toFixed(4)} ± ${d.sd.toFixed(4)} (n=${d.n})</b></div>`;
+      }
+      tip.innerHTML = html;
+      tip.style.display = "block";
+      const box = svg.getBoundingClientRect();
+      tip.style.left = Math.min(ev.clientX - box.left + 14, box.width - 250) + "px";
+      tip.style.top = (((m.t + i * rowH) / H) * box.height - 34) + "px";
+    });
+    hit.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    svg.appendChild(hit);
+  });
+}
+
+function init() {
+  const urlMeas = QP.get("meas");
+  if (urlMeas && ["word_tokens", "paper"].includes(urlMeas)) state.meas = urlMeas;
+  $("meas").value = state.meas;
+  const urlLayer = parseInt(QP.get("layer"), 10);
+  if (Number.isInteger(urlLayer)) state.layer = Math.max(0, Math.min(INDEX.n_layers - 1, urlLayer));
+  const urlSort = QP.get("sort");
+  if (urlSort && ["think", "dont", "alpha"].includes(urlSort)) state.sort = urlSort;
+  $("sort").value = state.sort;
+  if (QP.get("exact") === "0") { state.complete = false; $("complete").checked = false; }
+  const layer = $("layer");
+  layer.max = INDEX.n_layers - 1;
+  layer.value = state.layer;
+
+  $("meas").addEventListener("change", (e) => { state.meas = e.target.value; render(); });
+  $("sort").addEventListener("change", (e) => { state.sort = e.target.value; render(); });
+  $("complete").addEventListener("change", (e) => { state.complete = e.target.checked; render(); });
+  layer.addEventListener("input", (e) => { state.layer = +e.target.value; render(); });
+  new MutationObserver(render).observe(document.documentElement,
+    { attributes: true, attributeFilter: ["data-theme"] });
+
+  render();
+}
+
+(async () => {
+  try {
+    if (location.protocol === "file:") {
+      throw new Error("this page loads its data with fetch(), which browsers block on file:// — "
+        + "serve it instead: python -m http.server -d docs");
+    }
+    setStatus("loading…");
+    const r = await fetch("data/index.json");
+    if (!r.ok) throw new Error(`data/index.json: HTTP ${r.status}`);
+    INDEX = await r.json();
+    const g = await fetch("data/agg/words.json.gz");
+    if (!g.ok) throw new Error(`data/agg/words.json.gz: HTTP ${g.status} — `
+      + `run scripts/export_agg_data.py`);
+    const ds = new DecompressionStream("gzip");
+    DATA = await new Response(g.body.pipeThrough(ds)).json();
+    init();
+    setStatus("");
+  } catch (e) {
+    setStatus(String(e.message || e), true);
+  }
+})();
+</script>
+</body>
+</html>

@@ -25,6 +25,10 @@ across words per layer (two-stage: token-mean per word x sentence, then
 sentence-mean per word, then across words — words are the replicates).
 SAE/NLA are omitted there (4 layers / 1 layer make no curve).
 
+Also writes agg/words.json.gz for the per-word forest view (docs/forest.html):
+per word x layer, the sentence-mean paired delta vs no_mention (±1 std
+across sentences).
+
 Model-free and fast (reads only the exported chunks, not artifacts/);
 re-run after every export_viz_data.py run. The agg files are committed
 derived data, like the rest of docs/data/.
@@ -197,6 +201,45 @@ def layer_curves(per_word: dict) -> dict:
     return out
 
 
+def eligible(rec: dict, cid: str, mode: str) -> bool:
+    """Does this word x sentence record enter the paired-delta stats?"""
+    need = CONDS if mode == "complete" else [cid, "no_mention"]
+    return all(rec["exact"].get(c) for c in need)
+
+
+def word_delta_stats(per_word: dict) -> dict:
+    """agg/words.json.gz concept part: per word, the (layers,) sentence-mean
+    paired delta vs no_mention with ±1 std across sentences."""
+    words = sorted(per_word)
+    out: dict = {"words": words}
+    for var in CV_VARIANTS:
+        out[var] = {}
+        for mode in ("all", "complete"):
+            vm: dict = {}
+            for cid in DELTA_CONDS:
+                mean, std, n = [], [], []
+                for w in words:
+                    arrs = []
+                    for rec in per_word[w].values():
+                        if not eligible(rec, cid, mode):
+                            continue
+                        a, b = rec[cid].get(var), rec["no_mention"].get(var)
+                        if a is None or b is None:
+                            continue
+                        arrs.append((a - b).mean(1))  # (layers,)
+                    if arrs:
+                        m, s = mean_std(arrs)
+                        mean.append(rounded(m, 4))
+                        std.append(rounded(s, 4))
+                    else:
+                        mean.append(None)
+                        std.append(None)
+                    n.append(len(arrs))
+                vm[cid] = {"mean": mean, "std": std, "n": n}
+            out[var][mode] = vm
+    return out
+
+
 def collect(chunk: dict) -> dict[str, dict]:
     """Extract compact numpy records per sentence index from one word chunk."""
     out = {}
@@ -267,6 +310,9 @@ def main() -> None:
         json.dumps(sentences, ensure_ascii=False))
     (out_dir / "layers.json.gz").write_bytes(
         gzip.compress(json.dumps(layer_curves(per_word)).encode(), mtime=0))
+
+    (out_dir / "words.json.gz").write_bytes(
+        gzip.compress(json.dumps(word_delta_stats(per_word)).encode(), mtime=0))
     print(f"wrote {len(sis)} sentence aggregates "
           f"({len(words)} words, run {index['run_id']}) to {out_dir}")
 
