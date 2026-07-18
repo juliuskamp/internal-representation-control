@@ -1,21 +1,30 @@
 """Render one docs/ viewer chart as a static image (for slides / papers).
 
-Reads the same exported data the browser viewer fetches (docs/data/, written by
-scripts/export_viz_data.py) and reproduces the chart for a single selection of
-word / sentence / measurement / layer / baseline — no GPU or model needed, and
-the result matches the interactive viewer pixel-for-pixel in style (palette,
-bands, direct end labels, rotated token labels).
+Reads the same exported data the browser viewers fetch (docs/data/, written by
+scripts/export_viz_data.py + export_agg_data.py) and reproduces any of the four
+pages' charts — no GPU or model needed, matching the interactive viewers in
+style (palette, bands, direct end labels, rotated token labels). --chart picks
+the page:
+
+  word       docs/index.html      one word x sentence, tokens on x (default)
+  aggregate  docs/aggregate.html  word-mean ±1 std for one sentence, tokens on x
+  layers     docs/layers.html     token+sentence-collapsed, layers on x
+  forest     docs/forest.html     per-word paired Δ at one layer, words on y
 
 Usage:
   uv run python scripts/render_viewer_figure.py                    # list words
   uv run python scripts/render_viewer_figure.py --word Dust --sent 3
   uv run python scripts/render_viewer_figure.py --word Dust --sent 3 \
       --meas sae_v2 --layer 40 --agg sum --theme dark --out dust.svg
+  uv run python scripts/render_viewer_figure.py --chart aggregate --sent 3 --delta
+  uv run python scripts/render_viewer_figure.py --chart layers --delta --theme dark
+  uv run python scripts/render_viewer_figure.py --chart forest --layer 40
 
 Output format follows the --out extension (png/svg/pdf); default is a PNG in
 artifacts/figures/. Excluded (non-exact) conditions are dropped from the chart
-and reported on stdout, like the viewer's red chips; the viewer's footer meta
-line and the selected SAE latents are printed for use as a slide caption.
+and reported on stdout, like the viewer's red chips; the matching page's footer
+meta line (and for SAE charts the selected latents) is printed for use as a
+slide caption.
 """
 
 from irc import env  # noqa: F401
@@ -62,34 +71,49 @@ PT = 0.75
 
 @dataclasses.dataclass
 class Config:
+    chart: Literal["word", "aggregate", "layers", "forest"] = "word"
+    """Which viewer page to render (see module docstring)."""
     word: str | None = None
-    """Concept word (as in the viewer dropdown; case-insensitive). Omit to
-    list the available words and sentences."""
+    """word chart: concept word (as in the viewer dropdown; case-insensitive).
+    Omit to list the available words and sentences."""
     sent: int = 0
-    """Sentence index (0-based, the sNN number in the viewer dropdown)."""
+    """word/aggregate charts: sentence index (0-based, the sNN number in the
+    viewer dropdown)."""
     meas: Literal["word_tokens", "paper", "sae", "sae_v2", "nla"] = "word_tokens"
-    """Measurement: concept-vector variant, SAE latent selection, or NLA."""
+    """Measurement: concept-vector variant, SAE latent selection, or NLA.
+    layers/forest charts only have the concept-vector variants."""
     layer: int = 40
-    """Residual layer; snapped to the nearest SAE layer for sae/sae_v2 and
-    fixed to the NLA layer for nla."""
+    """Residual layer (word/aggregate/forest charts); snapped to the nearest
+    SAE layer for sae/sae_v2 and fixed to the NLA layer for nla."""
     base: Literal["band", "none"] = "band"
-    """Baseline: control-word ±1 std bands per condition, or none. band is
-    only available for concept-vector measurements (falls back to none
-    otherwise)."""
+    """word chart baseline: control-word ±1 std bands per condition, or none.
+    band is only available for concept-vector measurements (falls back to
+    none otherwise)."""
     agg: Literal["sum", "mean", "max"] = "sum"
     """Aggregation over the selected SAE latents (sae/sae_v2 only)."""
+    delta: bool = False
+    """aggregate/layers charts: paired per-word Δ vs the no-mention condition
+    instead of raw levels (the forest chart is always the paired Δ)."""
+    complete: bool = True
+    """aggregate/layers/forest charts: only words where all three conditions
+    are exact per sentence (--no-complete for every exact pair)."""
+    bands: bool = True
+    """aggregate/layers charts: shaded ±1 std across words (--no-bands)."""
+    sort: Literal["think", "dont", "alpha"] = "think"
+    """forest chart row order: by think Δ, by don't-think Δ, or alphabetical."""
     theme: Literal["light", "dark"] = "light"
     title: str = ""
     """Optional title above the chart (default: none — slides have their own)."""
     out: Path | None = None
-    """Output file; format from extension (.png/.svg/.pdf). Default:
-    artifacts/figures/{word}_s{NN}_{meas}_L{layer}_{theme}.png"""
+    """Output file; format from extension (.png/.svg/.pdf). Default: a PNG in
+    artifacts/figures/ named after the selection."""
     dpi: int = 200
     transparent: bool = False
     """Transparent background instead of the theme surface color."""
     summary: bool = True
-    """Summary panel left of the chart: per-condition mean over the response
-    tokens as a bar, ±1 std as an error bar (--no-summary to hide)."""
+    """word/aggregate charts: summary column right of the chart — mean ±1 std
+    over tokens (word) / of the per-word token-means (aggregate)
+    (--no-summary to hide)."""
 
 
 def load_gz(path: Path) -> dict:
@@ -293,6 +317,315 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
     plt.close(fig)
 
 
+CONDS_DELTA = [("think", "think"), ("dont_think", "don't think")]
+
+
+def fmt_ticks(ax, lo: float, hi: float, pal: dict, n_ticks: int = 6) -> None:
+    ticks = np.linspace(lo, hi, n_ticks)
+    r = abs(hi - lo)
+    fmt = (lambda v: f"{v:.3f}") if r < 0.5 else \
+          (lambda v: f"{v:.2f}") if r < 5 else (lambda v: f"{v:.0f}")
+    ax.set_yticks(ticks, [fmt(v) for v in ticks], fontsize=11 * PT, color=pal["ink2"])
+
+
+def style_axis(ax, pal: dict, lo: float, hi: float) -> None:
+    ax.set_facecolor("none")
+    for side in ax.spines.values():
+        side.set_visible(False)
+    ax.grid(axis="y", color=pal["line"], linewidth=0.75)
+    ax.set_axisbelow(True)
+    if lo < 0 < hi:
+        ax.axhline(0, color=pal["ink2"], linewidth=0.75)
+    ax.tick_params(length=0)
+
+
+def pad_range(lo: float, hi: float, frac: float = 0.08) -> tuple[float, float]:
+    if hi == lo:
+        hi = lo + 1
+    pad = (hi - lo) * frac
+    return lo - pad, hi + pad
+
+
+def finish(fig, conds_legend: list[tuple], cfg: Config, pal: dict, out: Path,
+           tw: float, h: float, extra_note: str = "") -> None:
+    """Legend row + optional title, then save — shared by all charts."""
+    handles = [Line2D([], [], color=col, linewidth=2 * PT, marker=mk,
+                      markersize=4.5, linestyle=ls) for _, col, mk, ls in conds_legend]
+    labels = [lb for lb, *_ in conds_legend]
+    fig.legend(handles, labels, loc="upper left", frameon=False, ncol=len(handles),
+               bbox_to_anchor=(MARGIN["l"] / tw, 1 - (MARGIN["t"] + (24 if cfg.title else 0)) / h),
+               borderaxespad=0, fontsize=13 * PT, labelcolor=pal["ink2"],
+               handlelength=1.4, columnspacing=1.6)
+    if cfg.title:
+        fig.text(MARGIN["l"] / tw, 1 - MARGIN["t"] / h, cfg.title,
+                 fontsize=15 * PT, color=pal["ink"], va="top", fontweight="bold")
+    if extra_note:
+        fig.text(1 - 14 / tw, 1 - MARGIN["t"] / h, extra_note,
+                 fontsize=11 * PT, color=pal["ink2"], va="top", ha="right")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=cfg.dpi, transparent=cfg.transparent,
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+# ---- aggregate chart (docs/aggregate.html) ---------------------------------
+
+def agg_series(chunk: dict, cfg: Config, layer: int, sae_layers: list[int]) -> list[dict]:
+    """Port of aggregate.html seriesData(): per condition, the word-mean/std
+    token series {vals, stds, n, sm} for the current selection."""
+    mode = "complete" if cfg.complete else "all"
+    source = chunk["deltas"] if cfg.delta else chunk["conds"]
+    conds = CONDS_DELTA if cfg.delta else COND
+    out = []
+    for cid, label in conds:
+        block = (source.get(cid) or {}).get(mode)
+        c = {"id": cid, "label": label, "vals": None, "stds": None,
+             "n": None, "sm": None}
+        if block:
+            if cfg.meas == "nla":
+                b = block.get("nla")
+                if b:
+                    c.update(vals=b["mean"], stds=b["std"], n=max(b["n"]),
+                             sm=b.get("summary"))
+            elif cfg.meas in ("sae", "sae_v2"):
+                li = sae_layers.index(layer)
+                vb = block.get(cfg.meas)
+                if vb and vb[cfg.agg]["mean"][li]:
+                    c.update(vals=vb[cfg.agg]["mean"][li],
+                             stds=vb[cfg.agg]["std"][li], n=vb["n"][li])
+                    s2 = vb[cfg.agg]["summary"]
+                    if s2["mean"][li] is not None:
+                        c["sm"] = {"mean": s2["mean"][li], "std": s2["std"][li]}
+            elif block.get(cfg.meas):
+                b = block[cfg.meas]
+                c.update(vals=b["mean"][layer], stds=b["std"][layer], n=b["n"])
+                if b.get("summary"):
+                    c["sm"] = {"mean": b["summary"]["mean"][layer],
+                               "std": b["summary"]["std"][layer]}
+        out.append(c)
+    return out
+
+
+def draw_aggregate(tokens: list[str], conds: list[dict], cfg: Config,
+                   pal: dict, out: Path) -> None:
+    n = len(tokens)
+    top = MARGIN["t"] + 26 + (24 if cfg.title else 0)
+    h = H - MARGIN["t"] + top
+    iw, ih = W - MARGIN["l"] - MARGIN["r"], H - MARGIN["t"] - MARGIN["b"]
+    summ = [c for c in conds if c["sm"] and cfg.summary]
+    sw = 50 if summ else 0
+    tw = W + sw
+
+    fig = plt.figure(figsize=(tw / 96, h / 96), dpi=cfg.dpi)
+    fig.patch.set_facecolor("none" if cfg.transparent else pal["surface"])
+    ax = fig.add_axes([MARGIN["l"] / tw, MARGIN["b"] / h, iw / tw, ih / h])
+
+    lo = hi = 0.0
+    for c in conds:
+        for i, v in enumerate(c["vals"] or []):
+            if v is None:
+                continue
+            lo, hi = min(lo, v), max(hi, v)
+            if cfg.bands:
+                lo = min(lo, v - c["stds"][i])
+                hi = max(hi, v + c["stds"][i])
+    for c in summ:
+        lo = min(lo, c["sm"]["mean"] - c["sm"]["std"])
+        hi = max(hi, c["sm"]["mean"] + c["sm"]["std"])
+    lo, hi = pad_range(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlim(0 if n > 1 else -0.5, n - 1 if n > 1 else 0.5)
+    style_axis(ax, pal, lo, hi)
+    fmt_ticks(ax, lo, hi, pal)
+    dp = "Δ vs no mention: " if cfg.delta else ""
+    # labelpad 2, not 8: with the Δ prefix the rotated label otherwise pokes
+    # past the left figure edge
+    ax.set_ylabel(dp + "mean " + y_label(cfg),
+                  fontsize=11.5 * PT, color=pal["ink2"], labelpad=2)
+    ax.set_xticks(range(n), tokens, rotation=38, ha="right",
+                  rotation_mode="anchor", fontsize=12 * PT,
+                  fontfamily=MONO, color=pal["ink"])
+
+    x = np.arange(n)
+    for c in conds:  # ±1 std bands behind the lines
+        if c["vals"] is None or not cfg.bands:
+            continue
+        v = np.array([np.nan if x_ is None else x_ for x_ in c["vals"]], dtype=float)
+        s = np.array([np.nan if x_ is None else x_ for x_ in c["stds"]], dtype=float)
+        ax.fill_between(x, v - s, v + s, color=pal[c["id"]], alpha=0.18, linewidth=0)
+    for c in conds:
+        if c["vals"] is None:
+            continue
+        v = np.array([np.nan if x_ is None else x_ for x_ in c["vals"]], dtype=float)
+        ax.plot(x, v, color=pal[c["id"]], linewidth=2 * PT,
+                solid_capstyle="round", solid_joinstyle="round", clip_on=False)
+        ax.plot(x, v, linestyle="none", marker=MARKERS[c["id"]],
+                color=pal[c["id"]], markersize=4.5, clip_on=False)
+
+    if summ:  # summary column: mean ±1 std across words of per-word token-means
+        sax = fig.add_axes([(MARGIN["l"] + iw + 14) / tw, MARGIN["b"] / h,
+                            36 / tw, ih / h], sharey=ax)
+        style_axis(sax, pal, lo, hi)
+        sax.tick_params(axis="y", labelleft=False, length=0)
+        sax.set_xlim(-0.5, 0.5)
+        sax.set_xticks([])
+        sax.set_xlabel("word\nmeans", fontsize=10 * PT, color=pal["ink2"])
+        for i, c in enumerate(summ):
+            xi = (i - (len(summ) - 1) / 2) * (5 / 36)
+            sax.errorbar(xi, c["sm"]["mean"], yerr=c["sm"]["std"],
+                         color=pal[c["id"]], linewidth=2 * PT, capsize=3,
+                         capthick=2 * PT)
+            sax.plot(xi, c["sm"]["mean"], linestyle="none",
+                     marker=MARKERS[c["id"]], color=pal[c["id"]],
+                     markersize=4.5, clip_on=False)
+
+    suffix = " − no mention" if cfg.delta else ""
+    legend = [(f"{c['label']}{suffix} — n={c['n']}", pal[c["id"]],
+               MARKERS[c["id"]], "-") for c in conds if c["vals"] is not None]
+    finish(fig, legend, cfg, pal, out, tw, h,
+           "line: mean over words" + (" · shaded: ±1 std" if cfg.bands else ""))
+
+
+# ---- layers chart (docs/layers.html) ---------------------------------------
+
+def layers_series(data: dict, cfg: Config) -> list[dict]:
+    vm = data[cfg.meas]["complete" if cfg.complete else "all"]
+    family = vm["deltas"] if cfg.delta else vm["conds"]
+    conds = CONDS_DELTA if cfg.delta else COND
+    return [{"id": cid, "label": label, **family[cid]}
+            for cid, label in conds if cid in family]
+
+
+def draw_layers(conds: list[dict], n_layers: int, cfg: Config, pal: dict,
+                out: Path) -> None:
+    # the page's 400px frame: 16px top margin, 48px bottom, plus legend row
+    top = MARGIN["t"] + 26 + (24 if cfg.title else 0)
+    bot = 48
+    ih = 400 - 16 - bot
+    h = top + ih + bot
+    iw = W - MARGIN["l"] - MARGIN["r"]
+    tw = W
+
+    fig = plt.figure(figsize=(tw / 96, h / 96), dpi=cfg.dpi)
+    fig.patch.set_facecolor("none" if cfg.transparent else pal["surface"])
+    ax = fig.add_axes([MARGIN["l"] / tw, bot / h, iw / tw, ih / h])
+
+    lo = hi = 0.0
+    for c in conds:
+        for v, s in zip(c["mean"], c["std"]):
+            lo = min(lo, v - (s if cfg.bands else 0))
+            hi = max(hi, v + (s if cfg.bands else 0))
+    lo, hi = pad_range(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlim(0, n_layers - 1)
+    style_axis(ax, pal, lo, hi)
+    fmt_ticks(ax, lo, hi, pal)
+    ax.set_xticks(range(0, n_layers, 10), [str(i) for i in range(0, n_layers, 10)],
+                  fontsize=11 * PT, color=pal["ink2"])
+    ax.set_xlabel("layer", fontsize=11.5 * PT, color=pal["ink2"])
+    dp = "Δ vs no mention: " if cfg.delta else ""
+    ax.set_ylabel(dp + "mean cosine with concept vector",
+                  fontsize=11.5 * PT, color=pal["ink2"], labelpad=2)
+
+    x = np.arange(n_layers)
+    for c in conds:
+        if cfg.bands:
+            m, s = np.asarray(c["mean"]), np.asarray(c["std"])
+            ax.fill_between(x, m - s, m + s, color=pal[c["id"]], alpha=0.18,
+                            linewidth=0)
+    for c in conds:
+        ax.plot(x, c["mean"], color=pal[c["id"]], linewidth=2 * PT,
+                solid_capstyle="round", solid_joinstyle="round")
+        ax.plot(x, c["mean"], linestyle="none", marker=MARKERS[c["id"]],
+                color=pal[c["id"]], markersize=3, clip_on=False)
+
+    suffix = " − no mention" if cfg.delta else ""
+    legend = [(f"{c['label']}{suffix} — n={c['n']}", pal[c["id"]],
+               MARKERS[c["id"]], "-") for c in conds]
+    finish(fig, legend, cfg, pal, out, tw, h,
+           "line: mean over words" + (" · shaded: ±1 std" if cfg.bands else ""))
+
+
+# ---- forest chart (docs/forest.html) ---------------------------------------
+
+def forest_rows(data: dict, cfg: Config, layer: int) -> list[dict]:
+    vm = data[cfg.meas]["complete" if cfg.complete else "all"]
+    rows = []
+    for wi, word in enumerate(data["words"]):
+        r = {"word": word}
+        for cid, _ in CONDS_DELTA:
+            b = vm[cid]
+            r[cid] = ({"v": b["mean"][wi][layer], "sd": b["std"][wi][layer],
+                       "n": b["n"][wi]} if b["mean"][wi] else None)
+        if r["think"] or r["dont_think"]:
+            rows.append(r)
+    if cfg.sort == "alpha":
+        rows.sort(key=lambda r: r["word"])
+    else:
+        key = "dont_think" if cfg.sort == "dont" else "think"
+        rows.sort(key=lambda r: r[key]["v"] if r[key] else -1e9, reverse=True)
+    return rows
+
+
+def draw_forest(rows: list[dict], cfg: Config, pal: dict, out: Path) -> None:
+    row_h = 16
+    top = 10 + 26 + (24 if cfg.title else 0)
+    bot = 42
+    ih = len(rows) * row_h
+    h = top + ih + bot
+    ml = 118
+    iw = W - ml - MARGIN["r"]
+    tw = W
+
+    fig = plt.figure(figsize=(tw / 96, h / 96), dpi=cfg.dpi)
+    fig.patch.set_facecolor("none" if cfg.transparent else pal["surface"])
+    ax = fig.add_axes([ml / tw, bot / h, iw / tw, ih / h])
+    ax.set_facecolor("none")
+    for side in ax.spines.values():
+        side.set_visible(False)
+
+    lo = hi = 0.0
+    for r in rows:
+        for cid, _ in CONDS_DELTA:
+            d = r[cid]
+            if d:
+                lo, hi = min(lo, d["v"] - d["sd"]), max(hi, d["v"] + d["sd"])
+    lo, hi = pad_range(lo, hi, 0.05)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(len(rows) - 0.5, -0.5)  # first row on top, like the page
+
+    ticks = np.linspace(lo, hi, 7)
+    fmt = (lambda v: f"{v:.3f}") if abs(hi - lo) < 0.05 else (lambda v: f"{v:.2f}")
+    ax.set_xticks(ticks, [fmt(v) for v in ticks], fontsize=11 * PT, color=pal["ink2"])
+    ax.set_yticks(range(len(rows)), [r["word"] for r in rows],
+                  fontsize=11 * PT, fontfamily=MONO, color=pal["ink"])
+    ax.grid(axis="x", color=pal["line"], linewidth=0.75)
+    ax.set_axisbelow(True)
+    if lo < 0 < hi:
+        ax.axvline(0, color=pal["ink2"], linewidth=0.75)
+    ax.tick_params(length=0)
+    ax.set_xlabel("Δ cosine with concept vector vs no mention",
+                  fontsize=11.5 * PT, color=pal["ink2"])
+
+    off = {"think": -2.5 / row_h, "dont_think": 2.5 / row_h}
+    for i, r in enumerate(rows):
+        for cid, _ in CONDS_DELTA:
+            d = r[cid]
+            if not d:
+                continue
+            y = i + off[cid]
+            ax.plot([d["v"] - d["sd"], d["v"] + d["sd"]], [y, y],
+                    color=pal[cid], linewidth=1.5 * PT, alpha=0.8,
+                    solid_capstyle="butt")
+            ax.plot(d["v"], y, linestyle="none", marker=MARKERS[cid],
+                    color=pal[cid], markersize=4.5, clip_on=False)
+
+    legend = [(f"{label} − no mention", pal[cid], MARKERS[cid], "-")
+              for cid, label in CONDS_DELTA]
+    finish(fig, legend, cfg, pal, out, tw, h,
+           "dot: mean over sentences · whisker: ±1 std")
+
+
 def meta_line(index: dict, cfg: Config, word: str, sentence: str, layer: int) -> str:
     """The viewer's footer line, for use as a slide caption."""
     if cfg.meas == "nla":
@@ -318,8 +651,109 @@ def meta_line(index: dict, cfg: Config, word: str, sentence: str, layer: int) ->
             f"sentence: “{sentence}” · {detail}")
 
 
+def meas_short(meas: str) -> str:
+    return "paper method" if meas == "paper" else "word-token method"
+
+
+def require_cv(cfg: Config) -> None:
+    if cfg.meas not in ("word_tokens", "paper"):
+        raise SystemExit(f"the {cfg.chart} chart only has the concept-vector "
+                         "variants (word_tokens, paper)")
+
+
+def run_prefix(index: dict) -> str:
+    return f"Run {index['run_id']} · google/gemma-3-27b-it (bf16, greedy)"
+
+
+def load_agg(name: str) -> dict:
+    p = DOCS_DATA / "agg" / name
+    if not p.exists():
+        raise SystemExit(f"{p} missing — run scripts/export_agg_data.py")
+    return load_gz(p)
+
+
+def suffixes(cfg: Config, delta_applies: bool = True) -> str:
+    s = "_delta" if cfg.delta and delta_applies else ""
+    return s + ("" if cfg.complete else "_all") + f"_{cfg.theme}"
+
+
+def main_aggregate(cfg: Config, index: dict) -> None:
+    if cfg.meas == "sae_v2" and "v2" not in index.get("sae_versions", ["v1"]):
+        raise SystemExit("this export has no sae_v2 series — re-run export_viz_data.py")
+    if cfg.meas == "nla":
+        layer = index["nla_layer"]
+    elif cfg.meas in ("sae", "sae_v2"):
+        layer = min(index["sae_layers"], key=lambda l: abs(l - cfg.layer))
+    else:
+        layer = max(0, min(index["n_layers"] - 1, cfg.layer))
+    chunk = load_agg(f"{cfg.sent}.json.gz")
+    conds = agg_series(chunk, cfg, layer, index["sae_layers"])
+    if not any(c["vals"] is not None for c in conds):
+        raise SystemExit("no plottable series for this selection")
+    out = cfg.out or (ARTIFACTS / "figures" /
+                      f"agg_s{cfg.sent:02d}_{cfg.meas}_L{layer}{suffixes(cfg)}.png")
+    draw_aggregate(chunk["tokens"], conds, cfg, THEMES[cfg.theme], out)
+    mode = ("complete cases (all three conditions exact)" if cfg.complete
+            else "all words with an exact completion per condition")
+    stat = ("paired per-word Δ vs no mention, mean ±1 std across words"
+            if cfg.delta else "mean ±1 std across concept words")
+    if cfg.meas == "nla":
+        detail = f"NLA judge score (0–100) on layer {layer} resid_post"
+    elif cfg.meas in ("sae", "sae_v2"):
+        agg = "average" if cfg.agg == "mean" else cfg.agg
+        detail = (f"SAE: Gemma Scope 2 residual 16k l0_medium, layer {layer}, "
+                  f"{agg} over selected latents "
+                  f"(selection {'v2, contrastive' if cfg.meas == 'sae_v2' else 'v1'})")
+    else:
+        detail = (f"concept vectors: {meas_short(cfg.meas)}, "
+                  f"layer {layer} of {index['n_layers'] - 1}")
+    print(f"{run_prefix(index)} · sentence: “{chunk['sentence']}” · "
+          f"{stat}, {mode} · {detail}")
+    print(f"wrote {out}")
+
+
+def main_layers(cfg: Config, index: dict) -> None:
+    require_cv(cfg)
+    conds = layers_series(load_agg("layers.json.gz"), cfg)
+    if not conds:
+        raise SystemExit("no plottable series for this selection")
+    out = cfg.out or (ARTIFACTS / "figures" /
+                      f"layers_{cfg.meas}{suffixes(cfg)}.png")
+    draw_layers(conds, index["n_layers"], cfg, THEMES[cfg.theme], out)
+    mode = ("complete cases (all three conditions exact per sentence)"
+            if cfg.complete else "all words with an exact completion per condition")
+    stat = ("paired per-word Δ vs no mention, mean ±1 std across words"
+            if cfg.delta else "mean ±1 std across concept words")
+    print(f"{run_prefix(index)} · token- and sentence-collapsed, {stat}, {mode} · "
+          f"concept vectors: {meas_short(cfg.meas)}, layers 0–{index['n_layers'] - 1}")
+    print(f"wrote {out}")
+
+
+def main_forest(cfg: Config, index: dict) -> None:
+    require_cv(cfg)
+    layer = max(0, min(index["n_layers"] - 1, cfg.layer))
+    rows = forest_rows(load_agg("words.json.gz"), cfg, layer)
+    if not rows:
+        raise SystemExit("no plottable rows for this selection")
+    out = cfg.out or (ARTIFACTS / "figures" /
+                      f"forest_{cfg.meas}_L{layer}{suffixes(cfg, delta_applies=False)}.png")
+    draw_forest(rows, cfg, THEMES[cfg.theme], out)
+    mode = ("complete cases (all three conditions exact per sentence)"
+            if cfg.complete else "all sentences with exact completions for the pair")
+    print(f"{run_prefix(index)} · layer {layer} of {index['n_layers'] - 1} · "
+          f"paired per-word Δ vs no mention, token-mean per sentence · {mode} · "
+          f"concept vectors: {meas_short(cfg.meas)}")
+    print(f"wrote {out}")
+
+
 def main(cfg: Config) -> None:
     index = json.loads((DOCS_DATA / "index.json").read_text())
+    if cfg.chart == "aggregate":
+        return main_aggregate(cfg, index)
+    if cfg.chart == "layers":
+        return main_layers(cfg, index)
+    if cfg.chart == "forest":
+        return main_forest(cfg, index)
     if cfg.word is None:
         print(f"run {index['run_id']}: {len(index['words'])} words, "
               f"sentences {index['sentence_order'][0]}–{index['sentence_order'][-1]}")

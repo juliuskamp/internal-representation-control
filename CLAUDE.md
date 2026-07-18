@@ -17,8 +17,8 @@ uv run python scripts/run_pipeline.py --run-id run1-core
 uv run python scripts/run_pipeline.py --run-id run1-core --stages generate measure
 uv run python scripts/run_pipeline.py --run-id run1-core --words Dust Oceans --sentences-per-word 5
 
-# Interactive viewers for a finished run (static image export of a viewer
-# chart: scripts/render_viewer_figure.py)
+# Interactive viewers for a finished run (static image export of any of the
+# four viewer charts: scripts/render_viewer_figure.py --chart word|aggregate|layers|forest)
 uv run python scripts/export_viz_data.py --run-id run1-core  # writes docs/data/
 uv run python scripts/export_agg_data.py   # docs/data/agg/ for aggregate.html
 python -m http.server -d docs                                # view at localhost:8000
