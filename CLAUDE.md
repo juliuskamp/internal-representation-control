@@ -17,9 +17,10 @@ uv run python scripts/run_pipeline.py --run-id run1-core
 uv run python scripts/run_pipeline.py --run-id run1-core --stages generate measure
 uv run python scripts/run_pipeline.py --run-id run1-core --words Dust Oceans --sentences-per-word 5
 
-# Interactive viewer for a finished run (static image export of a viewer
+# Interactive viewers for a finished run (static image export of a viewer
 # chart: scripts/render_viewer_figure.py)
 uv run python scripts/export_viz_data.py --run-id run1-core  # writes docs/data/
+uv run python scripts/export_agg_data.py   # docs/data/agg/ for aggregate.html
 python -m http.server -d docs                                # view at localhost:8000
 
 # Smoke tests (a: generation, b: SAE, c: concept vector, d: latent selection)
@@ -52,6 +53,6 @@ Requires a GPU with ~55 GB VRAM (bf16) and `.env` at the repo root with `HF_TOKE
 
 Run provenance: every invocation (config, versions, git commit) is appended to `artifacts/runs/{run_id}/invocations.jsonl`; `config.json` is a snapshot of the latest invocation only — the run's data may be the union of many invocations.
 
-**Viewer**: `docs/` is a static site for GitHub Pages (also embeddable via iframe; `?embed=1` hides the page chrome). `docs/index.html` fetches chunked data from `docs/data/` — `index.json` (metadata + word list), `shared-bands.json.gz` (word-independent `no_mention` null bands, deduplicated), `words/{word}.json.gz` (per-word slots, lazy-loaded). `scripts/export_viz_data.py` writes these from a run's stored activations; the data files are committed derived data, so publishing a new run means re-export + commit. fetch() is blocked on `file://` — always view through an HTTP server.
+**Viewer**: `docs/` is a static site for GitHub Pages (also embeddable via iframe; `?embed=1` hides the page chrome). `docs/index.html` fetches chunked data from `docs/data/` — `index.json` (metadata + word list), `shared-bands.json.gz` (word-independent `no_mention` null bands, deduplicated), `words/{word}.json.gz` (per-word slots, lazy-loaded). `scripts/export_viz_data.py` writes these from a run's stored activations; the data files are committed derived data, so publishing a new run means re-export + commit. fetch() is blocked on `file://` — always view through an HTTP server. `docs/aggregate.html` is a second page showing mean ±1 std across words per sentence; it reads `docs/data/agg/{si}.json.gz`, written by `scripts/export_agg_data.py` *from the word chunks* (re-run it after every export_viz_data.py run). `docs/layers.html` is a third page: concept-vector strength vs layer, collapsed over tokens+sentences (words as replicates); it reads `docs/data/agg/layers.json.gz` from the same export script.
 
 `artifacts/`, `scratch/`, and `.env` are gitignored — artifacts are the (large) data store, not code. `docs/data/` is deliberately tracked (it is the published site).

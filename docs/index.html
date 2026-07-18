@@ -161,7 +161,9 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <p>Gemma 3 27B-it writes a fixed sentence while instructed to think (or not think)
     about an unrelated word. Each point is the strength of the word&rsquo;s representation
     in the residual stream at that output token &mdash; the analogue of Figure&nbsp;24 in
-    <em>Emergent Introspective Awareness in Large Language Models</em>.</p>
+    <em>Emergent Introspective Awareness in Large Language Models</em>.
+    Averaged views: <a href="aggregate.html">word-averaged viewer</a> &middot;
+    <a href="layers.html">layer curves</a>.</p>
   </header>
 
   <div class="controls">
@@ -184,7 +186,6 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <div class="ctl"><label for="base">Baseline</label>
       <select id="base">
         <option value="band">Control words (±1 std, per condition)</option>
-        <option value="nomen">No-mention condition</option>
         <option value="none">None</option>
       </select></div>
     <div class="ctl layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
@@ -440,8 +441,7 @@ function seriesData() {
   const conds = [];
   for (const c of COND) {
     const rec = slot.conditions[c.id];
-    const isBaseCond = state.base === "nomen" && c.id === "no_mention";
-    if (!rec) { conds.push({ ...c, vals: null, band: null, excluded: false, missing: true, isBaseCond }); continue; }
+    if (!rec) { conds.push({ ...c, vals: null, band: null, excluded: false, missing: true }); continue; }
     let vals = null, band = null;
     if (rec.exact) {
       if (isNLA()) {
@@ -458,7 +458,7 @@ function seriesData() {
         }
       }
     }
-    conds.push({ ...c, vals, band, excluded: !rec.exact, completion: rec.completion, isBaseCond });
+    conds.push({ ...c, vals, band, excluded: !rec.exact, completion: rec.completion });
   }
   return { conds };
 }
@@ -482,16 +482,14 @@ function render() {
   // legend
   const lg = $("legend"); lg.innerHTML = "";
   for (const c of conds) {
-    if (!c.vals && !c.isBaseCond) continue;
+    if (!c.vals) continue;
     const it = document.createElement("span"); it.className = "it";
-    const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+    const color = cssv(c.cssVar);
     const sv = svgEl("svg", { width: 24, height: 12 });
-    const ln = svgEl("line", { x1: 0, x2: 24, y1: 6, y2: 6, stroke: color, "stroke-width": 2 });
-    if (c.isBaseCond) ln.setAttribute("stroke-dasharray", "4 3");
-    sv.appendChild(ln);
+    sv.appendChild(svgEl("line", { x1: 0, x2: 24, y1: 6, y2: 6, stroke: color, "stroke-width": 2 }));
     sv.appendChild(markEl(c.shape, 12, 6, color));
     it.appendChild(sv);
-    it.appendChild(document.createTextNode(c.isBaseCond ? `${c.label} (baseline)` : c.label));
+    it.appendChild(document.createTextNode(c.label));
     lg.appendChild(it);
   }
   for (const c of conds) {
@@ -584,7 +582,7 @@ function drawChart(tokens, conds) {
     const k = summ.length;
     const sx = (i) => px0 + pw / 2 + (i - (k - 1) / 2) * 5;
     summ.forEach(({ c, mean, sd }, i) => {
-      const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+      const color = cssv(c.cssVar);
       svg.appendChild(el("line", { x1: sx(i), x2: sx(i), y1: y(mean - sd),
         y2: y(mean + sd), stroke: color, "stroke-width": 1.5 }));
       for (const yy of [y(mean - sd), y(mean + sd)]) {
@@ -633,7 +631,7 @@ function drawChart(tokens, conds) {
   // series
   for (const c of conds) {
     if (!c.vals) continue;
-    const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+    const color = cssv(c.cssVar);
     let d = "", pen = false;  // null values (unjudged NLA tokens) leave gaps
     c.vals.forEach((v, i) => {
       if (v == null) { pen = false; return; }
@@ -642,7 +640,6 @@ function drawChart(tokens, conds) {
     });
     svg.appendChild(el("path", {
       d, fill: "none", stroke: color, "stroke-width": 2,
-      "stroke-dasharray": c.isBaseCond ? "5 4" : "none",
       "stroke-linejoin": "round", "stroke-linecap": "round",
     }));
     c.vals.forEach((v, i) => {
@@ -669,7 +666,7 @@ function drawChart(tokens, conds) {
       let html = `<div class="tt">“${tok.replace(/&/g, "&amp;").replace(/</g, "&lt;")}”</div>`;
       for (const c of conds) {
         if (!c.vals) continue;
-        const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+        const color = cssv(c.cssVar);
         html += `<div class="row"><span style="color:${color}">${c.label}</span><b>${fmtVal(c.vals[i])}</b></div>`;
         if (c.band) html += `<div class="row"><span style="color:${color};opacity:.75">${c.label} ±1σ</span><b>${c.band.lo[i].toFixed(2)}…${c.band.hi[i].toFixed(2)}</b></div>`;
       }
@@ -695,7 +692,7 @@ function drawChart(tokens, conds) {
       guide.setAttribute("visibility", "visible");
       let html = `<div class="tt">mean ±1 std</div>`;
       for (const { c, mean, sd } of summ) {
-        const color = c.isBaseCond ? cssv("--null") : cssv(c.cssVar);
+        const color = cssv(c.cssVar);
         html += `<div class="row"><span style="color:${color}">${c.label}</span><b>${fmtVal(mean)} ± ${fmtVal(sd)}</b></div>`;
       }
       tip.innerHTML = html;
@@ -862,8 +859,7 @@ function syncControls() {
   bandOpt.disabled = isSAE() || isNLA() || bandRestricted;
   bandOpt.hidden = bandRestricted;
   if ((isSAE() || isNLA()) && state.base === "band") {
-    const pref = ["nomen", "none"].filter((v) => !restrict.base || restrict.base.has(v));
-    state.base = pref[0] || "none";
+    state.base = "none";
     baseSel.value = state.base;
   }
   $("aggctl").hidden = !isSAE();

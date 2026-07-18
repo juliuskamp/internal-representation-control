@@ -1,0 +1,379 @@
+<!doctype html>
+<!-- Layer-curve viewer: concept-vector representation strength vs layer,
+     collapsed over tokens and sentences, mean ± 1 std across words. Data is
+     fetched from data/index.json and data/agg/layers.json.gz, written by
+     scripts/export_agg_data.py. Like the other pages this does NOT work over
+     file:// — serve it: python -m http.server -d docs. ?embed=1 hides the
+     page chrome. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Representation strength by layer — Gemma 3 27B</title>
+<style>
+/* Palette mirrors docs/index.html (and scripts/render_viewer_figure.py). */
+:root {
+  color-scheme: light dark;
+  --surface:      light-dark(#fbfbf9, #1a1a19);
+  --surface-2:    light-dark(#f1f0ec, #242422);
+  --ink:          light-dark(#171614, #f2f1ec);
+  --ink-2:        light-dark(#55534d, #c3c2b7);
+  --line:         light-dark(#e2e1db, #35342f);
+  --accent:       light-dark(#2a78d6, #3987e5);
+  --think:        light-dark(#2a78d6, #3987e5);
+  --dont:         light-dark(#eda100, #c98500);
+  --nomen:        light-dark(#1baf7a, #199e70);
+  --null:         light-dark(#b9b7b0, #55534d);
+  --chip-bad-ink: light-dark(#9c2a29, #e8908f);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface); color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
+.embed .wrap { padding: 12px 12px 24px; }
+.embed header { display: none; }
+header h1 {
+  font-family: Charter, Georgia, "Times New Roman", serif;
+  font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
+}
+header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
+header a { color: var(--accent); }
+.controls {
+  display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
+  padding: 14px 16px; background: var(--surface-2); border-radius: 10px;
+  margin-bottom: 8px;
+}
+.ctl { display: flex; flex-direction: column; gap: 4px; }
+.ctl label {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-2);
+}
+select, input[type=checkbox] { accent-color: var(--accent); }
+.ctl input[type=checkbox] { width: 17px; height: 17px; margin: 6px 0; }
+select {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+  max-width: 380px;
+}
+select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.status { color: var(--ink-2); font-size: 12.5px; min-height: 1.2em; margin: 6px 2px 0; }
+.status.err { color: var(--chip-bad-ink); }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 2px 4px; font-size: 13px; color: var(--ink-2); }
+.legend .it { display: inline-flex; align-items: center; gap: 7px; }
+.legend .it b { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+figure { margin: 0; }
+.chartbox { position: relative; }
+svg text { fill: var(--ink-2); font-family: system-ui, sans-serif; }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .zero { stroke: var(--ink-2); stroke-width: 1; }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
+  font-size: 12.5px; box-shadow: 0 3px 14px rgba(0,0,0,.14); display: none;
+  min-width: 190px; z-index: 3;
+}
+.tooltip .tt { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; margin-bottom: 4px; }
+.tooltip .row { display: flex; justify-content: space-between; gap: 14px; }
+.tooltip .row b { font-variant-numeric: tabular-nums; font-weight: 600; }
+footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Representation strength by layer</h1>
+    <p>Concept-vector cosine collapsed over the response tokens and all
+    sentences, mean &plusmn; 1 std across concept words, per residual layer
+    (two-stage: token-mean per word&thinsp;&times;&thinsp;sentence, then
+    sentence-mean per word &mdash; words are the replicates). Per-sentence
+    view: <a href="aggregate.html">word-averaged viewer</a> &middot;
+    per-word view: <a href="index.html">single-word viewer</a>.</p>
+  </header>
+
+  <div class="controls">
+    <div class="ctl"><label for="meas">Measurement</label>
+      <select id="meas">
+        <option value="word_tokens">Concept vector — word tokens</option>
+        <option value="paper">Concept vector — paper method</option>
+      </select></div>
+    <div class="ctl"><label for="delta">View</label>
+      <select id="delta"
+              title="Paired per-word delta against the no-mention condition; word-level offsets cancel before averaging">
+        <option value="levels">Values per condition</option>
+        <option value="delta">Δ vs no mention (paired)</option>
+      </select></div>
+    <div class="ctl"><label for="complete">Complete cases only</label>
+      <input type="checkbox" id="complete" checked
+             title="Per sentence, only words where all three conditions are exact"></div>
+    <div class="ctl"><label for="bands">±1 std bands</label>
+      <input type="checkbox" id="bands" checked></div>
+  </div>
+  <div class="status" id="status" role="status"></div>
+
+  <div class="legend" id="legend"></div>
+  <figure>
+    <div class="chartbox">
+      <svg id="chart" width="100%" viewBox="0 0 1020 400" role="img"
+           aria-label="Representation strength by layer line chart"></svg>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+  </figure>
+
+  <footer id="meta"></footer>
+</div>
+
+<script>
+if (new URLSearchParams(location.search).has("embed")) {
+  document.documentElement.classList.add("embed");
+}
+
+const COND = [
+  { id: "think", label: "think", cssVar: "--think", shape: "circle" },
+  { id: "dont_think", label: "don't think", cssVar: "--dont", shape: "square" },
+  { id: "no_mention", label: "no mention", cssVar: "--nomen", shape: "triangle" },
+];
+const $ = (id) => document.getElementById(id);
+const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const svgEl = (tag, at) => {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in at) e.setAttribute(k, at[k]);
+  return e;
+};
+function markEl(shape, cx, cy, color, s = 3) {
+  if (shape === "square")
+    return svgEl("rect", { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, fill: color });
+  if (shape === "triangle")
+    return svgEl("polygon", { fill: color,
+      points: `${cx},${cy - 1.3 * s} ${cx - 1.2 * s},${cy + s} ${cx + 1.2 * s},${cy + s}` });
+  return svgEl("circle", { cx, cy, r: s, fill: color });
+}
+
+let INDEX = null, DATA = null;
+const state = { meas: "word_tokens", complete: true, delta: false, bands: true };
+const QP = new URLSearchParams(location.search);
+
+function syncURL() {
+  const p = new URLSearchParams(location.search);
+  p.set("meas", state.meas);
+  if (state.delta) p.set("delta", "1"); else p.delete("delta");
+  if (!state.complete) p.set("exact", "0"); else p.delete("exact");
+  if (!state.bands) p.set("bands", "0"); else p.delete("bands");
+  history.replaceState(null, "", `${location.pathname}?${p.toString()}${location.hash}`);
+}
+
+function setStatus(msg, isErr = false) {
+  const s = $("status");
+  s.textContent = msg;
+  s.className = "status" + (isErr ? " err" : "");
+}
+
+function seriesData() {
+  const vm = DATA[state.meas][state.complete ? "complete" : "all"];
+  const family = state.delta ? vm.deltas : vm.conds;
+  const conds = state.delta ? COND.filter((c) => c.id !== "no_mention") : COND;
+  return conds.map((c) => {
+    const b = family[c.id];
+    return { ...c, vals: b ? b.mean : null, stds: b ? b.std : null,
+             n: b ? b.n : null };
+  });
+}
+
+function render() {
+  const conds = seriesData();
+
+  const lg = $("legend"); lg.innerHTML = "";
+  for (const c of conds) {
+    if (!c.vals) continue;
+    const it = document.createElement("span"); it.className = "it";
+    const color = cssv(c.cssVar);
+    const sv = svgEl("svg", { width: 24, height: 12 });
+    if (state.bands) sv.appendChild(svgEl("rect", { x: 0, y: 2, width: 24, height: 8,
+      fill: color, opacity: 0.18 }));
+    sv.appendChild(svgEl("line", { x1: 0, x2: 24, y1: 6, y2: 6,
+      stroke: color, "stroke-width": 2 }));
+    sv.appendChild(markEl(c.shape, 12, 6, color));
+    it.appendChild(sv);
+    const txt = document.createElement("span");
+    txt.innerHTML = `${c.label}${state.delta ? " − no mention" : ""} — <b>n=${c.n}</b>`;
+    it.appendChild(txt);
+    lg.appendChild(it);
+  }
+  if (lg.childElementCount) {
+    const note = document.createElement("span"); note.className = "it";
+    note.textContent = "line: mean over words" + (state.bands ? " · shaded: ±1 std" : "");
+    lg.appendChild(note);
+  }
+
+  drawChart(conds);
+  syncURL();
+  $("meta").textContent =
+    `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · ` +
+    `token- and sentence-collapsed, ` +
+    (state.delta ? "paired per-word Δ vs no mention, mean ±1 std across words" :
+      "mean ±1 std across concept words") +
+    `, ${state.complete ? "complete cases (all three conditions exact per sentence)"
+      : "all words with an exact completion per condition"} · ` +
+    `concept vectors: ${state.meas === "paper" ? "paper method" : "word-token method"}, ` +
+    `layers 0–${INDEX.n_layers - 1}`;
+}
+
+function drawChart(conds) {
+  const svg = $("chart");
+  const W = 1020, H = 400, m = { t: 16, r: 28, b: 48, l: 58 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const L = INDEX.n_layers;
+  const x = (i) => m.l + (i * iw) / (L - 1);
+
+  let lo = 0, hi = 0;
+  const consider = (v) => { if (v == null) return; lo = Math.min(lo, v); hi = Math.max(hi, v); };
+  for (const c of conds) {
+    (c.vals || []).forEach((v, i) => {
+      consider(v);
+      if (v != null && state.bands) { consider(v - c.stds[i]); consider(v + c.stds[i]); }
+    });
+  }
+  if (hi === lo) hi = lo + 1;
+  const pad = (hi - lo) * 0.08;
+  lo -= pad; hi += pad;
+  const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+
+  svg.innerHTML = "";
+
+  const ticks = 5;
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + ((hi - lo) * i) / ticks;
+    const yy = y(v);
+    svg.appendChild(svgEl("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "grid" }));
+    const t = svgEl("text", { x: m.l - 8, y: yy + 4, "text-anchor": "end", "font-size": 11 });
+    const r = Math.abs(hi - lo);
+    t.textContent = r < 0.5 ? v.toFixed(3) : r < 5 ? v.toFixed(2) : v.toFixed(0);
+    svg.appendChild(t);
+  }
+  if (lo < 0 && hi > 0) {
+    svg.appendChild(svgEl("line", { x1: m.l, x2: m.l + iw, y1: y(0), y2: y(0), class: "zero" }));
+  }
+  const yl = svgEl("text", { x: 14, y: m.t + ih / 2, "font-size": 11.5,
+    transform: `rotate(-90 14 ${m.t + ih / 2})`, "text-anchor": "middle" });
+  yl.textContent = (state.delta ? "Δ vs no mention: " : "") + "mean cosine with concept vector";
+  svg.appendChild(yl);
+
+  for (let li = 0; li < L; li += 10) {
+    const t = svgEl("text", { x: x(li), y: m.t + ih + 18, "text-anchor": "middle",
+      "font-size": 11 });
+    t.textContent = li;
+    svg.appendChild(t);
+  }
+  const xl = svgEl("text", { x: m.l + iw / 2, y: m.t + ih + 36, "text-anchor": "middle",
+    "font-size": 11.5 });
+  xl.textContent = "layer";
+  svg.appendChild(xl);
+
+  // ±1 std areas behind the lines
+  for (const c of state.bands ? conds : []) {
+    if (!c.vals) continue;
+    const color = cssv(c.cssVar);
+    let d = "";
+    c.vals.forEach((v, i) => { d += `${i ? "L" : "M"}${x(i)},${y(v + c.stds[i])}`; });
+    for (let i = L - 1; i >= 0; i--) d += `L${x(i)},${y(c.vals[i] - c.stds[i])}`;
+    svg.appendChild(svgEl("path", { d: d + "Z", fill: color, opacity: 0.18 }));
+  }
+
+  // mean lines + markers
+  for (const c of conds) {
+    if (!c.vals) continue;
+    const color = cssv(c.cssVar);
+    let d = "";
+    c.vals.forEach((v, i) => { d += `${i ? "L" : "M"}${x(i)},${y(v)}`; });
+    svg.appendChild(svgEl("path", {
+      d, fill: "none", stroke: color, "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round",
+    }));
+    c.vals.forEach((v, i) => {
+      svg.appendChild(markEl(c.shape, x(i), y(v), color, 2));
+    });
+  }
+
+  // hover layer: one hit column per layer
+  const tip = $("tooltip");
+  const guide = svgEl("line", { y1: m.t, y2: m.t + ih, stroke: cssv("--ink-2"),
+    "stroke-width": 1, "stroke-dasharray": "3 3", visibility: "hidden" });
+  svg.appendChild(guide);
+  const half = (x(1) - x(0)) / 2;
+  for (let i = 0; i < L; i++) {
+    const xL = Math.max(m.l, x(i) - half), xR = Math.min(m.l + iw, x(i) + half);
+    const hit = svgEl("rect", {
+      x: xL, y: m.t, width: xR - xL, height: ih, fill: "transparent",
+    });
+    hit.addEventListener("mousemove", (ev) => {
+      guide.setAttribute("x1", x(i)); guide.setAttribute("x2", x(i));
+      guide.setAttribute("visibility", "visible");
+      let html = `<div class="tt">layer ${i}</div>`;
+      for (const c of conds) {
+        if (!c.vals) continue;
+        const color = cssv(c.cssVar);
+        html += `<div class="row"><span style="color:${color}">${c.label}</span>`
+          + `<b>${c.vals[i].toFixed(4)} ± ${c.stds[i].toFixed(4)}</b></div>`;
+      }
+      tip.innerHTML = html;
+      tip.style.display = "block";
+      const box = svg.getBoundingClientRect();
+      const px = (x(i) / W) * box.width;
+      tip.style.left = Math.min(px + 14, box.width - 230) + "px";
+      tip.style.top = Math.max(ev.clientY - box.top - 40, 6) + "px";
+    });
+    hit.addEventListener("mouseleave", () => {
+      tip.style.display = "none"; guide.setAttribute("visibility", "hidden");
+    });
+    svg.appendChild(hit);
+  }
+}
+
+function init() {
+  const urlMeas = QP.get("meas");
+  if (urlMeas && ["word_tokens", "paper"].includes(urlMeas)) state.meas = urlMeas;
+  $("meas").value = state.meas;
+  if (QP.get("delta") === "1") { state.delta = true; $("delta").value = "delta"; }
+  if (QP.get("exact") === "0") { state.complete = false; $("complete").checked = false; }
+  if (QP.get("bands") === "0") { state.bands = false; $("bands").checked = false; }
+
+  $("meas").addEventListener("change", (e) => { state.meas = e.target.value; render(); });
+  $("delta").addEventListener("change", (e) => { state.delta = e.target.value === "delta"; render(); });
+  $("complete").addEventListener("change", (e) => { state.complete = e.target.checked; render(); });
+  $("bands").addEventListener("change", (e) => { state.bands = e.target.checked; render(); });
+  new MutationObserver(render).observe(document.documentElement,
+    { attributes: true, attributeFilter: ["data-theme"] });
+
+  render();
+}
+
+(async () => {
+  try {
+    if (location.protocol === "file:") {
+      throw new Error("this page loads its data with fetch(), which browsers block on file:// — "
+        + "serve it instead: python -m http.server -d docs");
+    }
+    setStatus("loading…");
+    const r = await fetch("data/index.json");
+    if (!r.ok) throw new Error(`data/index.json: HTTP ${r.status}`);
+    INDEX = await r.json();
+    const g = await fetch("data/agg/layers.json.gz");
+    if (!g.ok) throw new Error(`data/agg/layers.json.gz: HTTP ${g.status} — `
+      + `run scripts/export_agg_data.py`);
+    const ds = new DecompressionStream("gzip");
+    DATA = await new Response(g.body.pipeThrough(ds)).json();
+    init();
+    setStatus("");
+  } catch (e) {
+    setStatus(String(e.message || e), true);
+  }
+})();
+</script>
+</body>
+</html>

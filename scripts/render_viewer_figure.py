@@ -4,7 +4,7 @@ Reads the same exported data the browser viewer fetches (docs/data/, written by
 scripts/export_viz_data.py) and reproduces the chart for a single selection of
 word / sentence / measurement / layer / baseline — no GPU or model needed, and
 the result matches the interactive viewer pixel-for-pixel in style (palette,
-bands, dashed no-mention baseline, direct end labels, rotated token labels).
+bands, direct end labels, rotated token labels).
 
 Usage:
   uv run python scripts/render_viewer_figure.py                    # list words
@@ -72,10 +72,10 @@ class Config:
     layer: int = 40
     """Residual layer; snapped to the nearest SAE layer for sae/sae_v2 and
     fixed to the NLA layer for nla."""
-    base: Literal["band", "nomen", "none"] = "band"
-    """Baseline: control-word ±1 std bands per condition, the no-mention
-    condition as a dashed gray line, or none. band is only available for
-    concept-vector measurements (falls back to nomen otherwise)."""
+    base: Literal["band", "none"] = "band"
+    """Baseline: control-word ±1 std bands per condition, or none. band is
+    only available for concept-vector measurements (falls back to none
+    otherwise)."""
     agg: Literal["sum", "mean", "max"] = "sum"
     """Aggregation over the selected SAE latents (sae/sae_v2 only)."""
     theme: Literal["light", "dark"] = "light"
@@ -126,8 +126,7 @@ def series_data(slot: dict, cfg: Config, layer: int, sae_layers: list[int]) -> l
     for cid, label in COND:
         rec = slot["conditions"].get(cid)
         c = {"id": cid, "label": label, "vals": None, "band": None,
-             "excluded": False, "completion": None,
-             "is_base": cfg.base == "nomen" and cid == "no_mention"}
+             "excluded": False, "completion": None}
         if rec is None:
             out.append(c)
             continue
@@ -235,7 +234,7 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
         sax.set_xlabel("mean\n±1 std", fontsize=10 * PT, color=pal["ink2"])
         k = len(summ)
         for i, (c, m, s) in enumerate(summ):
-            color = pal["null"] if c["is_base"] else pal[c["id"]]
+            color = pal[c["id"]]
             xi = (i - (k - 1) / 2) * (5 / 36)  # ~point-width x offsets
             sax.errorbar(xi, m, yerr=s, color=color, linewidth=2 * PT,
                          capsize=3, capthick=2 * PT)
@@ -256,28 +255,21 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
     for c in conds:
         if c["vals"] is None:
             continue
-        color = pal["null"] if c["is_base"] else pal[c["id"]]
+        color = pal[c["id"]]
         vals = np.array([np.nan if v is None else v for v in c["vals"]], dtype=float)
         ax.plot(x, vals, color=color, linewidth=2 * PT, solid_capstyle="round",
-                solid_joinstyle="round", clip_on=False,
-                linestyle=(0, (3.75, 3)) if c["is_base"] else "-")
+                solid_joinstyle="round", clip_on=False)
         ax.plot(x, vals, linestyle="none", marker=MARKERS[c["id"]], color=color,
                 markersize=4.5, clip_on=False)
 
     # legend row above the chart, like the viewer's
     handles, labels = [], []
     for c in conds:
-        if c["vals"] is None and not c["is_base"]:
+        if c["vals"] is None:
             continue
-        if c["is_base"]:
-            handles.append(Line2D([], [], color=pal["null"], linewidth=2 * PT,
-                                  linestyle=(0, (3.75, 3)),
-                                  marker=MARKERS[c["id"]], markersize=4.5))
-            labels.append(f"{c['label']} (baseline)")
-        else:
-            handles.append(Line2D([], [], color=pal[c["id"]], linewidth=2 * PT,
-                                  marker=MARKERS[c["id"]], markersize=4.5))
-            labels.append(c["label"])
+        handles.append(Line2D([], [], color=pal[c["id"]], linewidth=2 * PT,
+                              marker=MARKERS[c["id"]], markersize=4.5))
+        labels.append(c["label"])
     for c in conds:
         if c["band"] is not None:
             handles.append(Patch(facecolor=pal[c["id"]], alpha=0.5, linewidth=0))
@@ -340,7 +332,7 @@ def main(cfg: Config) -> None:
     if cfg.meas == "sae_v2" and "v2" not in index.get("sae_versions", ["v1"]):
         raise SystemExit("this export has no sae_v2 series — re-run export_viz_data.py")
     if cfg.meas in ("sae", "sae_v2", "nla") and cfg.base == "band":
-        cfg.base = "nomen"  # like the viewer: bands only exist for concept vectors
+        cfg.base = "none"  # like the viewer: bands only exist for concept vectors
 
     if cfg.meas == "nla":
         layer = index["nla_layer"]
