@@ -142,6 +142,29 @@ const COND = [
 const $ = (id) => document.getElementById(id);
 const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
+// Axis range + ticks at nice steps (1/2/2.5/5 x 10^k), expanded outward so the
+// first/last grid line sits at the figure edge. Callers anchor lo/hi to
+// include 0, so a range that doesn't cross 0 stays clamped at it. The 0 tick
+// is labeled plain "0". Mirrors nice_scale() in scripts/render_viewer_figure.py.
+function niceScale(lo, hi, target = 6) {
+  const raw = (((hi - lo) || 1) / target) * 1.2;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  let step = mag;
+  for (const f of [2, 2.5, 5, 10])
+    if (Math.abs(Math.log((f * mag) / raw)) < Math.abs(Math.log(step / raw))) step = f * mag;
+  lo = Math.floor(lo / step + 1e-9) * step;
+  hi = Math.ceil(hi / step - 1e-9) * step;
+  if (hi === lo) hi = lo + step;
+  let d = 0;
+  while (d < 9 && Math.abs(step * 10 ** d - Math.round(step * 10 ** d)) > step * 1e-6) d++;
+  const ticks = [], labels = [];
+  for (let i = 0; i <= Math.round((hi - lo) / step); i++) {
+    const t = lo + i * step;
+    ticks.push(t);
+    labels.push(Math.abs(t) < step * 1e-6 ? "0" : t.toFixed(d));
+  }
+  return { lo, hi, ticks, labels };
+}
 const svgEl = (tag, at) => {
   const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const k in at) e.setAttribute(k, at[k]);
@@ -233,23 +256,20 @@ function drawChart(rows) {
     if (!d) continue;
     lo = Math.min(lo, d.v - d.sd); hi = Math.max(hi, d.v + d.sd);
   }
-  if (hi === lo) hi = lo + 1;
-  const pad = (hi - lo) * 0.05;
-  lo -= pad; hi += pad;
+  const ns = niceScale(lo, hi, 7);
+  lo = ns.lo; hi = ns.hi;
   const x = (v) => m.l + ((v - lo) / (hi - lo)) * iw;
   const y = (i) => m.t + i * rowH + rowH / 2;
 
   svg.innerHTML = "";
 
-  const ticks = 6;
-  for (let i = 0; i <= ticks; i++) {
-    const v = lo + ((hi - lo) * i) / ticks;
+  ns.ticks.forEach((v, i) => {
     svg.appendChild(svgEl("line", { x1: x(v), x2: x(v), y1: m.t, y2: m.t + ih, class: "grid" }));
     const t = svgEl("text", { x: x(v), y: m.t + ih + 18, "text-anchor": "middle", "font-size": 11 });
-    t.textContent = v.toFixed(Math.abs(hi - lo) < 0.05 ? 3 : 2);
+    t.textContent = ns.labels[i];
     svg.appendChild(t);
-  }
-  if (lo < 0 && hi > 0) {
+  });
+  if (lo <= 0 && hi >= 0) {
     svg.appendChild(svgEl("line", { x1: x(0), x2: x(0), y1: m.t, y2: m.t + ih, class: "zero" }));
   }
   const xl = svgEl("text", { x: m.l + iw / 2, y: m.t + ih + 36, "text-anchor": "middle", "font-size": 11.5 });

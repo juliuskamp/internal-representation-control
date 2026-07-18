@@ -32,6 +32,7 @@ from irc import env  # noqa: F401
 import dataclasses
 import gzip
 import json
+import math
 from pathlib import Path
 from typing import Literal
 
@@ -114,6 +115,29 @@ class Config:
     """word/aggregate charts: summary column right of the chart — mean ±1 std
     over tokens (word) / of the per-word token-means (aggregate)
     (--no-summary to hide)."""
+
+
+def nice_scale(lo: float, hi: float, target: int = 6) -> tuple[float, float, list[float], list[str]]:
+    """Axis range and ticks at nice steps (1/2/2.5/5 x 10^k), expanded outward
+    so the first/last grid line sits at the figure edge. Callers anchor lo/hi
+    to include 0, so a range that doesn't cross 0 stays clamped at it. The 0
+    tick is labeled plain \"0\". Mirrored in the docs/ pages' niceScale()."""
+    span = (hi - lo) or 1.0
+    raw = span / target * 1.2  # slight bias toward the larger candidate step
+    mag = 10.0 ** math.floor(math.log10(raw))
+    step = min((m * mag for m in (1, 2, 2.5, 5, 10)),
+               key=lambda s: abs(math.log(s / raw)))
+    lo2 = math.floor(lo / step + 1e-9) * step
+    hi2 = math.ceil(hi / step - 1e-9) * step
+    if hi2 == lo2:
+        hi2 = lo2 + step
+    n = round((hi2 - lo2) / step)
+    ticks = [lo2 + i * step for i in range(n + 1)]
+    d = 0  # fewest decimals that render the step exactly
+    while d < 9 and abs(step * 10 ** d - round(step * 10 ** d)) > step * 1e-6:
+        d += 1
+    labels = ["0" if abs(t) < step * 1e-6 else f"{t:.{d}f}" for t in ticks]
+    return lo2, hi2, ticks, labels
 
 
 def load_gz(path: Path) -> dict:
@@ -209,7 +233,7 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
     ax = fig.add_axes([MARGIN["l"] / tw, MARGIN["b"] / h, iw / tw, ih / h])
     ax.set_facecolor("none")
 
-    # y range like the viewer: anchored to include 0, 8% padding
+    # y range like the viewer: anchored to include 0, nice tick steps
     lo = hi = 0.0
     for c in conds:
         for v in c["vals"] or []:
@@ -220,22 +244,16 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
             hi = max(hi, c["band"][1].max())
     for _, m, s in summ:
         lo, hi = min(lo, m - s), max(hi, m + s)
-    if hi == lo:
-        hi = lo + 1
-    pad = (hi - lo) * 0.08
-    lo, hi = lo - pad, hi + pad
+    lo, hi, ticks, tick_labels = nice_scale(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_xlim(0 if n > 1 else -0.5, n - 1 if n > 1 else 0.5)
 
     for side in ax.spines.values():
         side.set_visible(False)
-    ticks = np.linspace(lo, hi, 6)
-    fmt = (lambda v: f"{v:.2f}") if abs(hi - lo) < 5 else (lambda v: f"{v:.0f}")
-    ax.set_yticks(ticks, [fmt(v) for v in ticks],
-                  fontsize=11 * PT, color=pal["ink2"])
+    ax.set_yticks(ticks, tick_labels, fontsize=11 * PT, color=pal["ink2"])
     ax.grid(axis="y", color=pal["line"], linewidth=0.75)
     ax.set_axisbelow(True)
-    if lo < 0 < hi:
+    if lo <= 0 <= hi:
         ax.axhline(0, color=pal["ink2"], linewidth=0.75)
 
     ax.set_ylabel(y_label(cfg), fontsize=11.5 * PT, color=pal["ink2"], labelpad=8)
@@ -251,7 +269,7 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
         sax.tick_params(axis="y", labelleft=False, length=0)
         sax.grid(axis="y", color=pal["line"], linewidth=0.75)
         sax.set_axisbelow(True)
-        if lo < 0 < hi:
+        if lo <= 0 <= hi:
             sax.axhline(0, color=pal["ink2"], linewidth=0.75)
         sax.set_xlim(-0.5, 0.5)
         sax.set_xticks([])
@@ -320,30 +338,15 @@ def draw(tokens: list[str], conds: list[dict], cfg: Config, pal: dict,
 CONDS_DELTA = [("think", "think"), ("dont_think", "don't think")]
 
 
-def fmt_ticks(ax, lo: float, hi: float, pal: dict, n_ticks: int = 6) -> None:
-    ticks = np.linspace(lo, hi, n_ticks)
-    r = abs(hi - lo)
-    fmt = (lambda v: f"{v:.3f}") if r < 0.5 else \
-          (lambda v: f"{v:.2f}") if r < 5 else (lambda v: f"{v:.0f}")
-    ax.set_yticks(ticks, [fmt(v) for v in ticks], fontsize=11 * PT, color=pal["ink2"])
-
-
 def style_axis(ax, pal: dict, lo: float, hi: float) -> None:
     ax.set_facecolor("none")
     for side in ax.spines.values():
         side.set_visible(False)
     ax.grid(axis="y", color=pal["line"], linewidth=0.75)
     ax.set_axisbelow(True)
-    if lo < 0 < hi:
+    if lo <= 0 <= hi:
         ax.axhline(0, color=pal["ink2"], linewidth=0.75)
     ax.tick_params(length=0)
-
-
-def pad_range(lo: float, hi: float, frac: float = 0.08) -> tuple[float, float]:
-    if hi == lo:
-        hi = lo + 1
-    pad = (hi - lo) * frac
-    return lo - pad, hi + pad
 
 
 def finish(fig, conds_legend: list[tuple], cfg: Config, pal: dict, out: Path,
@@ -432,11 +435,11 @@ def draw_aggregate(tokens: list[str], conds: list[dict], cfg: Config,
     for c in summ:
         lo = min(lo, c["sm"]["mean"] - c["sm"]["std"])
         hi = max(hi, c["sm"]["mean"] + c["sm"]["std"])
-    lo, hi = pad_range(lo, hi)
+    lo, hi, ticks, tick_labels = nice_scale(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_xlim(0 if n > 1 else -0.5, n - 1 if n > 1 else 0.5)
     style_axis(ax, pal, lo, hi)
-    fmt_ticks(ax, lo, hi, pal)
+    ax.set_yticks(ticks, tick_labels, fontsize=11 * PT, color=pal["ink2"])
     dp = "Δ vs no mention: " if cfg.delta else ""
     # labelpad 2, not 8: with the Δ prefix the rotated label otherwise pokes
     # past the left figure edge
@@ -515,11 +518,11 @@ def draw_layers(conds: list[dict], n_layers: int, cfg: Config, pal: dict,
         for v, s in zip(c["mean"], c["std"]):
             lo = min(lo, v - (s if cfg.bands else 0))
             hi = max(hi, v + (s if cfg.bands else 0))
-    lo, hi = pad_range(lo, hi)
+    lo, hi, ticks, tick_labels = nice_scale(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_xlim(0, n_layers - 1)
     style_axis(ax, pal, lo, hi)
-    fmt_ticks(ax, lo, hi, pal)
+    ax.set_yticks(ticks, tick_labels, fontsize=11 * PT, color=pal["ink2"])
     ax.set_xticks(range(0, n_layers, 10), [str(i) for i in range(0, n_layers, 10)],
                   fontsize=11 * PT, color=pal["ink2"])
     ax.set_xlabel("layer", fontsize=11.5 * PT, color=pal["ink2"])
@@ -590,18 +593,16 @@ def draw_forest(rows: list[dict], cfg: Config, pal: dict, out: Path) -> None:
             d = r[cid]
             if d:
                 lo, hi = min(lo, d["v"] - d["sd"]), max(hi, d["v"] + d["sd"])
-    lo, hi = pad_range(lo, hi, 0.05)
+    lo, hi, ticks, tick_labels = nice_scale(lo, hi, target=7)
     ax.set_xlim(lo, hi)
     ax.set_ylim(len(rows) - 0.5, -0.5)  # first row on top, like the page
 
-    ticks = np.linspace(lo, hi, 7)
-    fmt = (lambda v: f"{v:.3f}") if abs(hi - lo) < 0.05 else (lambda v: f"{v:.2f}")
-    ax.set_xticks(ticks, [fmt(v) for v in ticks], fontsize=11 * PT, color=pal["ink2"])
+    ax.set_xticks(ticks, tick_labels, fontsize=11 * PT, color=pal["ink2"])
     ax.set_yticks(range(len(rows)), [r["word"] for r in rows],
                   fontsize=11 * PT, fontfamily=MONO, color=pal["ink"])
     ax.grid(axis="x", color=pal["line"], linewidth=0.75)
     ax.set_axisbelow(True)
-    if lo < 0 < hi:
+    if lo <= 0 <= hi:
         ax.axvline(0, color=pal["ink2"], linewidth=0.75)
     ax.tick_params(length=0)
     ax.set_xlabel("Δ cosine with concept vector vs no mention",
