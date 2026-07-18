@@ -19,6 +19,9 @@ Usage:
   uv run python scripts/render_viewer_figure.py --chart aggregate --sent 3 --delta
   uv run python scripts/render_viewer_figure.py --chart layers --delta --theme dark
   uv run python scripts/render_viewer_figure.py --chart forest --layer 40
+  # or paste a viewer URL (local or GitHub Pages) instead of the flags:
+  uv run python scripts/render_viewer_figure.py \
+      "http://localhost:8000/?word=Dust&sent=3&meas=word_tokens&layer=40"
 
 Output format follows the --out extension (png/svg/pdf); default is a PNG in
 artifacts/figures/. Excluded (non-exact) conditions are dropped from the chart
@@ -35,6 +38,7 @@ import json
 import math
 from pathlib import Path
 from typing import Literal
+from urllib.parse import parse_qs, urlsplit
 
 import matplotlib
 
@@ -72,6 +76,13 @@ PT = 0.75
 
 @dataclasses.dataclass
 class Config:
+    url: tyro.conf.Positional[str | None] = None
+    """Instead of the flags below: a viewer URL to reproduce, e.g.
+    http://localhost:8000/aggregate.html?sent=3&meas=word_tokens&layer=41&bands=0
+    — only the part after the last / matters (page picks --chart, query params
+    map onto the matching flags; flags given alongside are overridden by the
+    URL where it specifies a value). Style flags (theme/title/out/dpi/
+    transparent) are never in viewer URLs and always come from the flags."""
     chart: Literal["word", "aggregate", "layers", "forest"] = "word"
     """Which viewer page to render (see module docstring)."""
     word: str | None = None
@@ -747,7 +758,54 @@ def main_forest(cfg: Config, index: dict) -> None:
     print(f"wrote {out}")
 
 
+URL_PAGES = {"": "word", "index": "word", "aggregate": "aggregate",
+             "layers": "layers", "forest": "forest"}
+
+
+def apply_url(cfg: Config) -> None:
+    """Map a viewer URL (page name after the last /, plus the query string the
+    pages' syncURL() writes) onto cfg. Viewer-only params (embed, table,
+    only_*) are ignored; params the URL omits keep their flag/default value,
+    matching the pages, which delete a param when it is at its default."""
+    parts = urlsplit(cfg.url)
+    page = parts.path.rsplit("/", 1)[-1].removesuffix(".html")
+    if page not in URL_PAGES:
+        raise SystemExit(f"unrecognized viewer page {page!r} "
+                         f"(know {', '.join(sorted(p for p in URL_PAGES if p))})")
+    cfg.chart = URL_PAGES[page]
+    q = {k: v[-1] for k, v in parse_qs(parts.query).items()}
+
+    def pick(name: str, choices: tuple[str, ...]) -> None:
+        if name in q:
+            if q[name] not in choices:
+                raise SystemExit(f"{name}={q[name]!r} not one of {', '.join(choices)}")
+            setattr(cfg, name, q[name])
+
+    if "word" in q:
+        cfg.word = q["word"]
+    for name in ("sent", "layer"):
+        if name in q:
+            try:
+                setattr(cfg, name, int(q[name]))
+            except ValueError:
+                raise SystemExit(f"{name}={q[name]!r} is not an integer")
+    pick("meas", ("word_tokens", "paper", "sae", "sae_v2", "nla"))
+    pick("base", ("band", "none"))
+    pick("agg", ("sum", "mean", "max"))
+    pick("sort", ("think", "dont", "alpha"))
+    if "delta" in q:
+        cfg.delta = q["delta"] == "1"
+    if "exact" in q:
+        cfg.complete = q["exact"] != "0"
+    if "bands" in q:
+        cfg.bands = q["bands"] != "0"
+    if "summary" in q:
+        cfg.summary = q["summary"] != "0"
+
+
 def main(cfg: Config) -> None:
+    if cfg.url is not None:
+        apply_url(cfg)
     index = json.loads((DOCS_DATA / "index.json").read_text())
     if cfg.chart == "aggregate":
         return main_aggregate(cfg, index)
