@@ -37,8 +37,18 @@ body {
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
-.embed .wrap { padding: 12px 12px 24px; }
+.embed .wrap { padding: 12px 12px 24px; display: flex; flex-direction: column; }
 .embed header { display: none; }
+/* Embed layout: figure first, controls below it; hide the table toggle and
+   the run/model meta footer. */
+.embed .chips { order: 1; }
+.embed .legend { order: 2; }
+.embed figure { order: 3; }
+.embed .controls { order: 4; }
+.embed .status { order: 5; }
+.embed .latents { order: 6; }
+.embed .nlabox { order: 7; }
+.embed .tablebox, .embed footer { display: none; }
 header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
   font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
