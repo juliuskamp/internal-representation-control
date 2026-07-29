@@ -60,7 +60,7 @@ header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
   font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
 }
-header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
+header p { color: var(--ink-2); margin: 0 0 12px; max-width: 68ch; }
 .controls {
   display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
   padding: 14px 16px; background: var(--surface-2); border-radius: 10px;
@@ -73,6 +73,7 @@ header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
   color: var(--ink-2);
 }
 select, input[type=range], input[type=checkbox] { accent-color: var(--accent); }
+input[type=range].locked { pointer-events: none; }
 .ctl input[type=checkbox] { width: 17px; height: 17px; margin: 6px 0; }
 select {
   font: inherit; color: var(--ink); background: var(--surface);
@@ -92,7 +93,9 @@ select:focus-visible, input:focus-visible, button:focus-visible {
   background: var(--chip-bad-bg); color: var(--chip-bad-ink);
   border-radius: 999px; padding: 3px 12px; font-size: 12.5px;
 }
-.legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 2px 4px; font-size: 13px; color: var(--ink-2); }
+.legend { display: flex; gap: 5px 18px; flex-wrap: wrap; margin: 14px 2px 4px; font-size: 13px; color: var(--ink-2); }
+/* two groups (condition lines, baseline bands): the row breaks between them */
+.legend .grp { display: inline-flex; gap: 5px 18px; flex-wrap: wrap; }
 .legend .it { display: inline-flex; align-items: center; gap: 7px; }
 .sw { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
 .sw.band { width: 18px; height: 12px; border-radius: 3px; opacity: .5; }
@@ -168,7 +171,36 @@ th, td {
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 th:first-child, td:first-child { text-align: left; font-family: ui-monospace, Menlo, Consolas, monospace; }
-footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
+/* view switcher: pills under the header intro, current page marked */
+.views { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 22px; }
+.views .v {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px;
+}
+.views a.v:hover { color: var(--accent); border-color: var(--accent); }
+.views .v.cur {
+  background: var(--surface-2); color: var(--ink); font-weight: 600;
+  border-color: transparent;
+}
+/* run provenance as label -> value rows instead of one long sentence */
+footer {
+  margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px;
+  color: var(--ink-2); font-size: 12.5px;
+}
+footer dl {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 16px; margin: 0; max-width: 78ch;
+}
+footer dt {
+  font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  padding-top: 2px; opacity: .75;
+}
+footer dd { margin: 0; }
+footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ink); }
+@media (max-width: 620px) {
+  footer dl { grid-template-columns: 1fr; gap: 0; }
+  footer dt { margin-top: 9px; }
+}
 </style>
 </head>
 <body>
@@ -178,10 +210,13 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <p>Gemma 3 27B-it writes a fixed sentence while instructed to think (or not think)
     about an unrelated word. Each point is the strength of the word&rsquo;s representation
     in the residual stream at that output token &mdash; the analogue of Figure&nbsp;24 in
-    <em>Emergent Introspective Awareness in Large Language Models</em>.
-    Other views: <a href="aggregate.html">word-averaged</a> &middot;
-    <a href="layers.html">layer curves</a> &middot;
-    <a href="forest.html">per-word forest</a>.</p>
+    <em>Emergent Introspective Awareness in Large Language Models</em>.</p>
+    <nav class="views" aria-label="Other views of this run">
+      <span class="v cur" aria-current="page">Single word</span>
+      <a class="v" href="aggregate.html">Word-averaged</a>
+      <a class="v" href="layers.html">Layer curves</a>
+      <a class="v" href="forest.html">Per-word forest</a>
+    </nav>
   </header>
 
   <div class="controls">
@@ -202,7 +237,7 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
       </select></div>
     <div class="ctl"><label for="base">Baseline</label>
       <select id="base">
-        <option value="band">Control words (±1 std, per condition)</option>
+        <option value="band">Baseline words (±1 std, per condition)</option>
         <option value="none">None</option>
       </select></div>
     <div class="ctl layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
@@ -379,6 +414,20 @@ function syncURL() {
   } catch (e) { /* no URL state available; harmless */ }
 }
 
+// Footer provenance: [label, value, mono?] rows rendered as a <dl>. `mono`
+// picks the monospace face, for ids (run, model). Falsy values are skipped.
+function setMeta(rows) {
+  const dl = document.createElement("dl");
+  for (const [k, v, mono] of rows) {
+    if (!v) continue;
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    if (mono) dd.className = "mono";
+    dl.append(dt, dd);
+  }
+  const f = $("meta"); f.innerHTML = ""; f.appendChild(dl);
+}
+
 function setStatus(msg, isErr = false) {
   const s = $("status");
   s.textContent = msg;
@@ -546,8 +595,12 @@ function render() {
     }
   }
 
-  // legend
+  // legend — lines and baseline bands in two groups, so that when the row is
+  // too narrow the break falls between the groups (all lines on one line, all
+  // bands on the next) instead of mid-group.
   const lg = $("legend"); lg.innerHTML = "";
+  const lineGrp = document.createElement("span"); lineGrp.className = "grp";
+  const bandGrp = document.createElement("span"); bandGrp.className = "grp";
   for (const c of conds) {
     if (!c.vals) continue;
     const it = document.createElement("span"); it.className = "it";
@@ -557,7 +610,7 @@ function render() {
     sv.appendChild(markEl(c.shape, 12, 6, color));
     it.appendChild(sv);
     it.appendChild(document.createTextNode(c.label));
-    lg.appendChild(it);
+    lineGrp.appendChild(it);
   }
   for (const c of conds) {
     if (!c.band) continue;
@@ -566,8 +619,9 @@ function render() {
     sw.style.background = cssv(c.cssVar);
     it.appendChild(sw);
     it.appendChild(document.createTextNode(`${c.label} baseline ±1 std`));
-    lg.appendChild(it);
+    bandGrp.appendChild(it);
   }
+  for (const g of [lineGrp, bandGrp]) if (g.childElementCount) lg.appendChild(g);
 
   drawChart(tokens, conds);
   renderLatents(slot);
@@ -575,16 +629,26 @@ function render() {
   renderTable(tokens, conds);
   applyExactStyling();
   syncURL();
-  $("meta").textContent =
-    `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · sentence: “${slot.sentence}” · ` +
-    (isNLA()
-      ? `NLA: kitft/nla-gemma3-27b-L41-av (greedy) on layer ${activeLayer()} resid_post — ` +
-        `${INDEX.nla_judge ? INDEX.nla_judge.model + ` (prompt ${INDEX.nla_judge.prompt_version})` : "LLM"} judge, ` +
-        `0–100 logit-expectation score for “${state.word.toLowerCase()}” in the explanation`
+  setMeta([
+    ["Run", INDEX.run_id, true],
+    ["Model", "google/gemma-3-27b-it · bf16, greedy", true],
+    ["Sentence", `“${slot.sentence}”`],
+    ...(isNLA()
+      ? [["Measurement", `NLA decode of layer ${activeLayer()} resid_post — ` +
+            "kitft/nla-gemma3-27b-L41-av (greedy)"],
+         ["Judge", `${INDEX.nla_judge ? INDEX.nla_judge.model +
+              ` (prompt ${INDEX.nla_judge.prompt_version})` : "LLM"} — ` +
+            `0–100 logit-expectation score for “${state.word.toLowerCase()}” in the explanation`]]
       : isSAE()
-      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents · ` +
-        "selection: contrastive vs 99 baseline words, excluded on 100 control-word prompts (never sees the experiment sentences)"
-      : `concept vectors: ${state.meas === "paper" ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)" : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)"}, layer ${activeLayer()} of 61`);
+      ? [["Measurement", "SAE latents — Gemma Scope 2 residual 16k l0_medium, " +
+            `layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} over checked latents`],
+         ["Selection", "contrastive vs 99 baseline words, excluded on 100 control-word " +
+            "prompts (never sees the experiment sentences)"]]
+      : [["Measurement", "Concept vector — " + (state.meas === "paper"
+            ? "paper method (last prompt token of “Tell me about {word}.” − 99-word baseline mean)"
+            : "word-token method (mean over the word’s own tokens across 4 templates − baseline mean)") +
+            `, layer ${activeLayer()} of ${INDEX.n_layers - 1}`]]),
+  ]);
 }
 
 function drawChart(tokens, conds) {
@@ -901,10 +965,18 @@ function renderTable(tokens, conds) {
 
 function syncControls() {
   const layer = $("layer");
-  layer.disabled = isNLA();  // NLA actor is trained on one fixed layer
+  // NLA actor is trained on one fixed layer, so the slider is locked there.
+  // Not `disabled` — browsers grey a disabled range out, ignoring accent-color;
+  // pointer-events + tabindex make it inert while it keeps its accent color.
+  const locked = isNLA();
+  layer.classList.toggle("locked", locked);
+  layer.tabIndex = locked ? -1 : 0;
+  layer.setAttribute("aria-disabled", String(locked));
   if (isNLA()) {
-    layer.min = 0; layer.max = 1; layer.value = 0;
-    $("layerval").textContent = activeLayer() + " (NLA, fixed)";
+    // disabled, but on the full layer scale so the thumb sits at the real layer
+    layer.min = 0; layer.max = INDEX.n_layers - 1; layer.step = 1;
+    layer.value = activeLayer();
+    $("layerval").textContent = activeLayer() + " (NLA)";
   } else if (isSAE()) {
     layer.min = 0; layer.max = INDEX.sae_layers.length - 1; layer.step = 1;
     layer.value = INDEX.sae_layers.indexOf(activeLayer());

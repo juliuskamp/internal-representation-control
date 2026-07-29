@@ -53,7 +53,7 @@ header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
   font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
 }
-header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
+header p { color: var(--ink-2); margin: 0 0 12px; max-width: 68ch; }
 header a { color: var(--accent); }
 .controls {
   display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
@@ -67,6 +67,7 @@ header a { color: var(--accent); }
   color: var(--ink-2);
 }
 select, input[type=range], input[type=checkbox] { accent-color: var(--accent); }
+input[type=range].locked { pointer-events: none; }
 .ctl input[type=checkbox] { width: 17px; height: 17px; margin: 6px 0; }
 select {
   font: inherit; color: var(--ink); background: var(--surface);
@@ -98,7 +99,36 @@ svg .zero { stroke: var(--ink-2); stroke-width: 1; }
 .tooltip .tt { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; margin-bottom: 4px; }
 .tooltip .row { display: flex; justify-content: space-between; gap: 14px; }
 .tooltip .row b { font-variant-numeric: tabular-nums; font-weight: 600; }
-footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
+/* view switcher: pills under the header intro, current page marked */
+.views { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 22px; }
+.views .v {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px;
+}
+.views a.v:hover { color: var(--accent); border-color: var(--accent); }
+.views .v.cur {
+  background: var(--surface-2); color: var(--ink); font-weight: 600;
+  border-color: transparent;
+}
+/* run provenance as label -> value rows instead of one long sentence */
+footer {
+  margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px;
+  color: var(--ink-2); font-size: 12.5px;
+}
+footer dl {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 16px; margin: 0; max-width: 78ch;
+}
+footer dt {
+  font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  padding-top: 2px; opacity: .75;
+}
+footer dd { margin: 0; }
+footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ink); }
+@media (max-width: 620px) {
+  footer dl { grid-template-columns: 1fr; gap: 0; }
+  footer dt { margin-top: 9px; }
+}
 </style>
 </head>
 <body>
@@ -109,10 +139,13 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     representation strength, for one sentence. &ldquo;Complete cases
     only&rdquo; keeps just the words where all three conditions reproduced
     the sentence exactly, so every line averages the same word set
-    (think-condition failures are otherwise the strongly-represented words).
-    Other views: <a href="index.html">single word</a> &middot;
-    <a href="layers.html">layer curves</a> &middot;
-    <a href="forest.html">per-word forest</a>.</p>
+    (think-condition failures are otherwise the strongly-represented words).</p>
+    <nav class="views" aria-label="Other views of this run">
+      <a class="v" href="index.html">Single word</a>
+      <span class="v cur" aria-current="page">Word-averaged</span>
+      <a class="v" href="layers.html">Layer curves</a>
+      <a class="v" href="forest.html">Per-word forest</a>
+    </nav>
   </header>
 
   <div class="controls">
@@ -271,6 +304,20 @@ function syncURL() {
   } catch (e) { /* no URL state available; harmless */ }
 }
 
+// Footer provenance: [label, value, mono?] rows rendered as a <dl>. `mono`
+// picks the monospace face, for ids (run, model). Falsy values are skipped.
+function setMeta(rows) {
+  const dl = document.createElement("dl");
+  for (const [k, v, mono] of rows) {
+    if (!v) continue;
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    if (mono) dd.className = "mono";
+    dl.append(dt, dd);
+  }
+  const f = $("meta"); f.innerHTML = ""; f.appendChild(dl);
+}
+
 function setStatus(msg, isErr = false) {
   const s = $("status");
   s.textContent = msg;
@@ -372,19 +419,22 @@ function render() {
   const mode = state.complete
     ? "complete cases (all three conditions exact)"
     : "all words with an exact completion per condition";
-  $("meta").textContent =
-    `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · ` +
-    `sentence: “${chunk.sentence}” · ` +
-    (state.delta ? "paired per-word Δ vs no mention, mean ±1 std across words" :
-      "mean ±1 std across concept words") + `, ${mode} · ` +
-    (isNLA()
+  setMeta([
+    ["Run", INDEX.run_id, true],
+    ["Model", "google/gemma-3-27b-it · bf16, greedy", true],
+    ["Sentence", `“${chunk.sentence}”`],
+    ["Aggregate", (state.delta
+      ? "paired per-word Δ vs no mention, mean ±1 std across words"
+      : "mean ±1 std across concept words") + `, ${mode}`],
+    ["Measurement", isNLA()
       ? `NLA judge score (0–100) on layer ${activeLayer()} resid_post`
       : isSAE()
-      ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ` +
-        `${state.saeAgg === "mean" ? "average" : state.saeAgg} over selected latents ` +
-        "(contrastive selection)"
-      : `concept vectors: ${state.meas === "paper" ? "paper method" : "word-token method"}, ` +
-        `layer ${activeLayer()} of ${INDEX.n_layers - 1}`);
+      ? "SAE latents — Gemma Scope 2 residual 16k l0_medium, " +
+        `layer ${activeLayer()}, ${state.saeAgg === "mean" ? "average" : state.saeAgg} ` +
+        "over selected latents (contrastive selection)"
+      : `Concept vector — ${state.meas === "paper" ? "paper method" : "word-token method"}, ` +
+        `layer ${activeLayer()} of ${INDEX.n_layers - 1}`],
+  ]);
 }
 
 function drawChart(tokens, conds) {
@@ -576,10 +626,18 @@ function drawChart(tokens, conds) {
 
 function syncControls() {
   const layer = $("layer");
-  layer.disabled = isNLA();
+  // NLA actor is trained on one fixed layer, so the slider is locked there.
+  // Not `disabled` — browsers grey a disabled range out, ignoring accent-color;
+  // pointer-events + tabindex make it inert while it keeps its accent color.
+  const locked = isNLA();
+  layer.classList.toggle("locked", locked);
+  layer.tabIndex = locked ? -1 : 0;
+  layer.setAttribute("aria-disabled", String(locked));
   if (isNLA()) {
-    layer.min = 0; layer.max = 1; layer.value = 0;
-    $("layerval").textContent = activeLayer() + " (NLA, fixed)";
+    // disabled, but on the full layer scale so the thumb sits at the real layer
+    layer.min = 0; layer.max = INDEX.n_layers - 1; layer.step = 1;
+    layer.value = activeLayer();
+    $("layerval").textContent = activeLayer() + " (NLA)";
   } else if (isSAE()) {
     layer.min = 0; layer.max = INDEX.sae_layers.length - 1; layer.step = 1;
     layer.value = INDEX.sae_layers.indexOf(activeLayer());

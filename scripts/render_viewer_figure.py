@@ -98,7 +98,7 @@ class Config:
     """Residual layer (word/aggregate/forest charts); snapped to the nearest
     SAE layer for sae and fixed to the NLA layer for nla."""
     base: Literal["band", "none"] = "band"
-    """word chart baseline: control-word ±1 std bands per condition, or none.
+    """word chart baseline: baseline-word ±1 std bands per condition, or none.
     band is only available for concept-vector measurements (falls back to
     none otherwise)."""
     agg: Literal["sum", "mean", "max"] = "sum"

@@ -51,7 +51,7 @@ header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
   font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;
 }
-header p { color: var(--ink-2); margin: 0 0 20px; max-width: 68ch; }
+header p { color: var(--ink-2); margin: 0 0 12px; max-width: 68ch; }
 header a { color: var(--accent); }
 .controls {
   display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
@@ -94,7 +94,36 @@ svg .zero { stroke: var(--ink-2); stroke-width: 1; }
 .tooltip .tt { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; margin-bottom: 4px; }
 .tooltip .row { display: flex; justify-content: space-between; gap: 14px; }
 .tooltip .row b { font-variant-numeric: tabular-nums; font-weight: 600; }
-footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75ch; }
+/* view switcher: pills under the header intro, current page marked */
+.views { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 22px; }
+.views .v {
+  font-size: 12.5px; color: var(--ink-2); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px;
+}
+.views a.v:hover { color: var(--accent); border-color: var(--accent); }
+.views .v.cur {
+  background: var(--surface-2); color: var(--ink); font-weight: 600;
+  border-color: transparent;
+}
+/* run provenance as label -> value rows instead of one long sentence */
+footer {
+  margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px;
+  color: var(--ink-2); font-size: 12.5px;
+}
+footer dl {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 16px; margin: 0; max-width: 78ch;
+}
+footer dt {
+  font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  padding-top: 2px; opacity: .75;
+}
+footer dd { margin: 0; }
+footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ink); }
+@media (max-width: 620px) {
+  footer dl { grid-template-columns: 1fr; gap: 0; }
+  footer dt { margin-top: 9px; }
+}
 </style>
 </head>
 <body>
@@ -104,10 +133,13 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <p>For every concept word, the paired difference in concept-vector cosine
     against the no-mention baseline at the selected residual layer: dot =
     mean over that word&rsquo;s sentences (token-mean per sentence), whisker =
-    &plusmn;1 std across sentences. Other views:
-    <a href="index.html">single word</a> &middot;
-    <a href="aggregate.html">word-averaged</a> &middot;
-    <a href="layers.html">layer curves</a>.</p>
+    &plusmn;1 std across sentences.</p>
+    <nav class="views" aria-label="Other views of this run">
+      <a class="v" href="index.html">Single word</a>
+      <a class="v" href="aggregate.html">Word-averaged</a>
+      <a class="v" href="layers.html">Layer curves</a>
+      <span class="v cur" aria-current="page">Per-word forest</span>
+    </nav>
   </header>
 
   <div class="controls">
@@ -230,6 +262,20 @@ function syncURL() {
   } catch (e) { /* no URL state available; harmless */ }
 }
 
+// Footer provenance: [label, value, mono?] rows rendered as a <dl>. `mono`
+// picks the monospace face, for ids (run, model). Falsy values are skipped.
+function setMeta(rows) {
+  const dl = document.createElement("dl");
+  for (const [k, v, mono] of rows) {
+    if (!v) continue;
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    if (mono) dd.className = "mono";
+    dl.append(dt, dd);
+  }
+  const f = $("meta"); f.innerHTML = ""; f.appendChild(dl);
+}
+
 function setStatus(msg, isErr = false) {
   const s = $("status");
   s.textContent = msg;
@@ -275,12 +321,16 @@ function render() {
   drawChart(rows);
   syncURL();
   $("layerval").textContent = state.layer;
-  $("meta").textContent =
-    `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · layer ${state.layer} of ${INDEX.n_layers - 1} · ` +
-    `paired per-word Δ vs no mention, token-mean per sentence · ` +
-    `${state.complete ? "complete cases (all three conditions exact per sentence)"
-      : "all sentences with exact completions for the pair"} · ` +
-    `concept vectors: ${state.meas === "paper" ? "paper method" : "word-token method"}`;
+  setMeta([
+    ["Run", INDEX.run_id, true],
+    ["Model", "google/gemma-3-27b-it · bf16, greedy", true],
+    ["Aggregate", "paired per-word Δ vs no mention, token-mean per sentence, " +
+      `layer ${state.layer} of ${INDEX.n_layers - 1}`],
+    ["Sentences", state.complete
+      ? "complete cases (all three conditions exact per sentence)"
+      : "all sentences with exact completions for the pair"],
+    ["Measurement", `Concept vector — ${state.meas === "paper" ? "paper method" : "word-token method"}`],
+  ]);
 }
 
 function drawChart(rows) {
