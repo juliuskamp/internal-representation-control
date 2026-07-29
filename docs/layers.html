@@ -72,15 +72,23 @@ header a { color: var(--accent); }
 .ctl.c3 { grid-column: span 3; }
 .ctl.c6 { grid-column: span 6; }
 .ctl select, .ctl input[type=range] { width: 100%; max-width: none; }
-/* Below the 6-track width the panel stacks one control per row: with fewer
-   tracks there is no span assignment that leaves no holes for every page and
-   measurement, and stacking is flush by construction. Spans must be reset
-   explicitly — a span wider than the explicit grid appends implicit columns
-   instead of clamping. */
-@media (max-width: 900px) {
+/* Narrower layouts: 4 tracks (a typical iframe embed is this wide, where one
+   control per row looked awful), then 2, then a single column on phones. The
+   spans are re-assigned at each step rather than clamped — a span wider than
+   the explicit grid appends implicit columns instead of clamping. */
+@media (max-width: 900px) and (min-width: 621px) {
+  .controls { grid-template-columns: repeat(4, 1fr); }
+  .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 2; }
+  .ctl.optsctl { grid-column: span 4; }
+}
+@media (max-width: 620px) and (min-width: 431px) {
+  .controls { grid-template-columns: repeat(2, 1fr); }
+  .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 1; }
+  .ctl.optsctl { grid-column: span 2; }
+}
+@media (max-width: 430px) {
   .controls { grid-template-columns: 1fr; }
   .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 1; }
-  .ctl select { max-width: 460px; }
 }
 .ctl label, .ctl .lbl {
   font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
@@ -185,11 +193,6 @@ footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: v
         <option value="levels">Values per condition</option>
         <option value="delta">Δ vs no mention (paired)</option>
       </select></div>
-    <div class="ctl c2"><span class="lbl">Options</span>
-      <div class="cbs">
-        <label class="cb"><input type="checkbox" id="complete" checked
-               title="Per sentence, only words where all three conditions are exact">Complete cases only</label>
-      </div></div>
     <div class="ctl c2"><label for="order">Replicate</label>
       <select id="order"
               title="What the spread is taken over: words (collapsing each word's sentences first), or every word × sentence cell at once (the paper's Figure 26 order)">
@@ -203,6 +206,11 @@ footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: v
         <option value="sem">±1 SEM</option>
         <option value="none">None</option>
       </select></div>
+    <div class="ctl c2 optsctl"><span class="lbl">Options</span>
+      <div class="cbs">
+        <label class="cb"><input type="checkbox" id="complete" checked
+               title="Per sentence, only words where all three conditions are exact">Complete cases only</label>
+      </div></div>
   </div>
   <div class="status" id="status" role="status"></div>
 

@@ -77,15 +77,25 @@ header p { color: var(--ink-2); margin: 0 0 12px; max-width: 68ch; }
 .ctl.c3 { grid-column: span 3; }
 .ctl.c6 { grid-column: span 6; }
 .ctl select, .ctl input[type=range] { width: 100%; max-width: none; }
-/* Below the 6-track width the panel stacks one control per row: with fewer
-   tracks there is no span assignment that leaves no holes for every page and
-   measurement, and stacking is flush by construction. Spans must be reset
-   explicitly — a span wider than the explicit grid appends implicit columns
-   instead of clamping. */
-@media (max-width: 900px) {
+/* Narrower layouts: 4 tracks (a typical iframe embed is this wide, where one
+   control per row looked awful), then 2, then a single column on phones. The
+   spans are re-assigned at each step rather than clamped — a span wider than
+   the explicit grid appends implicit columns instead of clamping. */
+@media (max-width: 900px) and (min-width: 621px) {
+  .controls { grid-template-columns: repeat(4, 1fr); }
+  .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 2; }
+  .ctl.wordctl { grid-column: span 1; }
+  .ctl.sentctl { grid-column: span 3; }
+  .controls:has(#aggctl:not([hidden])) .optsctl { grid-column: span 4; }
+}
+@media (max-width: 620px) and (min-width: 431px) {
+  .controls { grid-template-columns: repeat(2, 1fr); }
+  .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 1; }
+  .controls:has(#aggctl:not([hidden])) .optsctl { grid-column: span 2; }
+}
+@media (max-width: 430px) {
   .controls { grid-template-columns: 1fr; }
   .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 1; }
-  .ctl select { max-width: 460px; }
 }
 .ctl[hidden] { display: none; }
 .ctl label, .ctl .lbl {
@@ -254,7 +264,7 @@ footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: v
   </header>
 
   <div class="controls">
-    <div class="ctl"><label for="word">Word</label><select id="word"></select></div>
+    <div class="ctl wordctl"><label for="word">Word</label><select id="word"></select></div>
     <div class="ctl c3 sentctl"><label for="sent">Sentence</label><select id="sent"></select></div>
     <div class="ctl c2"><label for="meas">Measurement</label>
       <select id="meas">
@@ -276,7 +286,7 @@ footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: v
       </select></div>
     <div class="ctl c2 layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
       <input type="range" id="layer" min="0" max="61" step="1" value="40"></div>
-    <div class="ctl c2"><span class="lbl">Options</span>
+    <div class="ctl c2 optsctl"><span class="lbl">Options</span>
       <div class="cbs">
         <label class="cb"><input type="checkbox" id="summary" checked
                title="Mean ±1 std over the response tokens, per condition">Summary</label>
