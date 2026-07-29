@@ -55,20 +55,47 @@ header h1 {
 }
 header p { color: var(--ink-2); margin: 0 0 12px; max-width: 68ch; }
 header a { color: var(--accent); }
+/* Control panel: a 6-track grid, each control spanning a fixed number of
+   tracks, so columns line up between rows and the right edge stays flush.
+   As a flex row the wrap depended on the option text (a <select> sizes to its
+   widest option), so a long sentence or a different word list reflowed the
+   whole panel. */
 .controls {
-  display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: end;
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 14px 18px; align-items: end;
   padding: 14px 16px; background: var(--surface-2); border-radius: 10px;
   margin-bottom: 8px;
 }
-.ctl { display: flex; flex-direction: column; gap: 4px; }
+.ctl { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ctl.c2 { grid-column: span 2; }
+.ctl.c3 { grid-column: span 3; }
+.ctl.c6 { grid-column: span 6; }
+.ctl select, .ctl input[type=range] { width: 100%; max-width: none; }
+/* Below the 6-track width the panel stacks one control per row: with fewer
+   tracks there is no span assignment that leaves no holes for every page and
+   measurement, and stacking is flush by construction. Spans must be reset
+   explicitly — a span wider than the explicit grid appends implicit columns
+   instead of clamping. */
+@media (max-width: 900px) {
+  .controls { grid-template-columns: 1fr; }
+  .ctl, .ctl.c2, .ctl.c3, .ctl.c6 { grid-column: span 1; }
+  .ctl select { max-width: 460px; }
+}
 .ctl[hidden] { display: none; }
-.ctl label {
+.ctl label, .ctl .lbl {
   font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
   color: var(--ink-2);
 }
 select, input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 input[type=range].locked { pointer-events: none; }
-.ctl input[type=checkbox] { width: 17px; height: 17px; margin: 6px 0; }
+/* checkbox cell: one group label, the boxes inline beneath it, kept as tall
+   as a select so the grid rows stay even */
+.ctl .cbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-height: 33px; }
+.ctl .cb {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--ink);
+}
+.ctl .cb input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
 select {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
@@ -77,8 +104,16 @@ select {
 select:focus-visible, input:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
-.layerctl { min-width: 210px; }
-.layerctl .lv { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+.layerctl .lv {
+  font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600;
+  display: inline-block; min-width: 2ch;
+}
+/* when the SAE-only aggregation cell shows up, sentence and measurement give
+   up a track each so the first row still fills exactly (6-track layout only) */
+@media (min-width: 901px) {
+  .controls:has(#aggctl:not([hidden])) .sentctl,
+  .controls:has(#aggctl:not([hidden])) .measctl { grid-column: span 2; }
+}
 .status { color: var(--ink-2); font-size: 12.5px; min-height: 1.2em; margin: 6px 2px 0; }
 .status.err { color: var(--chip-bad-ink); }
 .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 2px 4px; font-size: 13px; color: var(--ink-2); }
@@ -149,33 +184,34 @@ footer dd.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: v
   </header>
 
   <div class="controls">
-    <div class="ctl"><label for="sent">Sentence</label><select id="sent"></select></div>
-    <div class="ctl"><label for="meas">Measurement</label>
+    <div class="ctl c3 sentctl"><label for="sent">Sentence</label><select id="sent"></select></div>
+    <div class="ctl c3 measctl"><label for="meas">Measurement</label>
       <select id="meas">
         <option value="word_tokens">Concept vector — word tokens</option>
         <option value="paper">Concept vector — paper method</option>
         <option value="sae">SAE latents — contrastive (top-5)</option>
         <option value="nla">NLA explanation — judge score</option>
       </select></div>
-    <div class="ctl" id="aggctl" hidden><label for="agg">Latent aggregation</label>
+    <div class="ctl c2" id="aggctl" hidden><label for="agg">Latent aggregation</label>
       <select id="agg">
         <option value="sum">Sum</option>
         <option value="mean">Average</option>
         <option value="max">Max</option>
       </select></div>
-    <div class="ctl layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
+    <div class="ctl c2 layerctl"><label for="layer">Layer <span class="lv" id="layerval"></span></label>
       <input type="range" id="layer" min="0" max="61" step="1" value="40"></div>
-    <div class="ctl"><label for="complete">Complete cases only</label>
-      <input type="checkbox" id="complete" checked
-             title="Only words where all three conditions are exact for this sentence"></div>
-    <div class="ctl"><label for="delta">View</label>
+    <div class="ctl c2"><label for="delta">View</label>
       <select id="delta"
               title="Paired per-word delta against the no-mention condition; word-level offsets cancel before averaging">
         <option value="levels">Values per condition</option>
         <option value="delta">Δ vs no mention (paired)</option>
       </select></div>
-    <div class="ctl"><label for="bands">±1 std bands</label>
-      <input type="checkbox" id="bands" checked></div>
+    <div class="ctl c2"><span class="lbl">Options</span>
+      <div class="cbs">
+        <label class="cb"><input type="checkbox" id="complete" checked
+               title="Only words where all three conditions are exact for this sentence">Complete cases only</label>
+        <label class="cb"><input type="checkbox" id="bands" checked>±1 std bands</label>
+      </div></div>
   </div>
   <div class="status" id="status" role="status"></div>
 
