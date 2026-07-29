@@ -9,7 +9,7 @@ from the PDF; do not edit. Notes:
   ("the word is always written in lowercase").
 """
 
-# 100 baseline words: activations averaged over these are subtracted to form
+# 99 baseline words: activations averaged over these are subtracted to form
 # every concept vector.
 BASELINE_WORDS_PAPER: list[str] = [
     "Desks", "Jackets", "Gondolas", "Laughter", "Intelligence", "Bicycles",

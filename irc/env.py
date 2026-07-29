@@ -1,7 +1,8 @@
 """Environment bootstrap. Import this before any huggingface/transformers import.
 
 Loads .env (HF_TOKEN, HF_HOME). huggingface_hub reads HF_HOME at import time,
-so this module must run first in every entry point.
+so this module must run first in every entry point. Set HF_HOME in .env if the
+default cache location has no room for the ~55 GB of weights.
 """
 
 import os
@@ -11,8 +12,6 @@ from dotenv import load_dotenv
 from irc.paths import REPO_ROOT
 
 load_dotenv(REPO_ROOT / ".env")
-
-os.environ.setdefault("HF_HOME", "/workspace/hf-cache")
 
 
 def require_hf_token() -> None:

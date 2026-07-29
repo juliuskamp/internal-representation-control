@@ -21,7 +21,7 @@ are skipped on re-run. The prompt template lives in irc/nla_judge_prompt.py
 and is versioned; the version is stored with every judgment.
 """
 
-from irc import env  # noqa: F401  (must be first: loads .env, sets HF_HOME)
+from irc import env  # noqa: F401  (must be first: loads .env before huggingface_hub)
 
 import dataclasses
 import json

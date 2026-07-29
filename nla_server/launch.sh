@@ -7,11 +7,14 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The AV checkpoint lives in /workspace/hf-cache, NOT the .env HF_HOME
-# (/root/hf-cache) — the root disk cannot hold the 108 GB repo alongside the
-# base model. See notes/nla_setup.md.
-DEFAULT_SNAP=/workspace/hf-cache/hub/models--kitft--nla-gemma3-27b-L41-av/snapshots/4e721238131ffb8348cff260fe81b8b34a270a0d
-SNAP="${1:-$DEFAULT_SNAP}"
+# Checkpoint location, in order: CLI argument, $NLA_AV_CHECKPOINT (same
+# override scripts/nla_explain.py honours), then the HF cache. Unlike the
+# client, the server needs the *full* ~108 GB snapshot on disk — put it on
+# whichever volume has the room and point one of these at it.
+HF_HUB="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+CACHED_SNAP="$(ls -d "$HF_HUB"/models--kitft--nla-gemma3-27b-L41-av/snapshots/*/ 2>/dev/null | head -1 || true)"
+SNAP="${1:-${NLA_AV_CHECKPOINT:-${CACHED_SNAP%/}}}"
+[ -n "$SNAP" ] || { echo "error: no NLA checkpoint found under $HF_HUB — pass the snapshot dir as \$1 or set NLA_AV_CHECKPOINT" >&2; exit 1; }
 [ -f "$SNAP/nla_meta.yaml" ] || { echo "error: $SNAP is not an NLA checkpoint (no nla_meta.yaml)" >&2; exit 1; }
 
 # ninja (venv) + nvcc (system CUDA) must be on PATH for flashinfer's JIT.
@@ -26,9 +29,7 @@ export CUDA_HOME=/usr/local/cuda
 #   fatal error: flashinfer/attention/decode.cuh: No such file or directory
 # The cache is pure regenerable compile output, so if a baked include path no
 # longer resolves, clear it and let this launch recompile (a few minutes).
-# Kept on the root disk (/root, ~18 GB free) deliberately — /workspace is at
-# ~99% (holds the 108 GB AV checkpoint). See notes/nla_setup.md.
-FI_CACHE="${FLASHINFER_CACHE_DIR:-${HOME:-/root}/.cache/flashinfer}"
+FI_CACHE="${FLASHINFER_CACHE_DIR:-$HOME/.cache/flashinfer}"
 if [ -d "$FI_CACHE" ]; then
     stale_inc="$(grep -rhoE --include=build.ninja \
         'isystem +[^ ]*/site-packages/flashinfer/data/include' "$FI_CACHE" \

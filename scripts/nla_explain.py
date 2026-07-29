@@ -2,7 +2,7 @@
 
 Feeds layer-41 resid_post vectors from a run's `acts/*.pt` through the NLA
 actor (activation verbalizer) `kitft/nla-gemma3-27b-L41-av`, served by a
-patched SGLang server (see notes/nla_setup.md). Use it to compare what the
+patched SGLang server (see nla_server/README.md). Use it to compare what the
 model is "thinking about" across conditions (think / dont_think / no_mention).
 
     uv run python scripts/nla_explain.py --run-id run1-core --words Dust \
@@ -18,7 +18,7 @@ hooks decoder-layer outputs; see irc/model.py). Stored acts cover response
 tokens only, so there is no BOS position to exclude.
 """
 
-from irc import env  # noqa: F401  (must be first: loads .env, sets HF_HOME)
+from irc import env  # noqa: F401  (must be first: loads .env before huggingface_hub)
 
 import dataclasses
 import json

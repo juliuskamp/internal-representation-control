@@ -30,6 +30,7 @@ N_LAYERS = 62
 
 # NLA actor (activation verbalizer), trained on resid_post of decoder block 41
 # (extraction_layer_index in the checkpoint's nla_meta.yaml; other layers are
-# out-of-distribution for it). See notes/nla_setup.md.
+# out-of-distribution for it). 41 means the *output* of decoder block 41, which
+# is exactly acts[41] in our captures — no ±1 offset (see scripts/nla_explain.py).
 NLA_REPO = "kitft/nla-gemma3-27b-L41-av"
 NLA_LAYER = 41

@@ -109,8 +109,7 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
       <select id="meas">
         <option value="word_tokens">Concept vector — word tokens</option>
         <option value="paper">Concept vector — paper method</option>
-        <option value="sae">SAE latents — v1 (top-5)</option>
-        <option value="sae_v2">SAE latents — v2, contrastive (top-5)</option>
+        <option value="sae">SAE latents — contrastive (top-5)</option>
         <option value="nla">NLA explanation — judge score</option>
       </select></div>
     <div class="ctl" id="aggctl" hidden><label for="agg">Latent aggregation</label>
@@ -229,7 +228,7 @@ const state = { si: "0", meas: "word_tokens", saeAgg: "sum", layer: 40,
 
 const QP = new URLSearchParams(location.search);
 
-function isSAE() { return state.meas === "sae" || state.meas === "sae_v2"; }
+function isSAE() { return state.meas === "sae"; }
 function isNLA() { return state.meas === "nla"; }
 
 function activeLayer() {
@@ -371,7 +370,7 @@ function render() {
       : isSAE()
       ? `SAE: Gemma Scope 2 residual 16k l0_medium, layer ${activeLayer()}, ` +
         `${state.saeAgg === "mean" ? "average" : state.saeAgg} over selected latents ` +
-        `(selection ${state.meas === "sae_v2" ? "v2, contrastive" : "v1"})`
+        "(contrastive selection)"
       : `concept vectors: ${state.meas === "paper" ? "paper method" : "word-token method"}, ` +
         `layer ${activeLayer()} of ${INDEX.n_layers - 1}`);
 }
@@ -582,16 +581,13 @@ function syncControls() {
 }
 
 async function init() {
-  if (!(INDEX.sae_versions || ["v1"]).includes("v2")) {
-    const o = $("meas").querySelector('option[value="sae_v2"]');
-    o.hidden = true; o.disabled = true;
-  }
-
   const sis = INDEX.sentence_order || [];
   const urlSent = QP.get("sent");
   state.si = (urlSent != null && sis.includes(urlSent)) ? urlSent : sis[0];
 
-  const urlMeas = QP.get("meas");
+  // "sae_v2" was the key while two latent selections were published; the
+  // contrastive one is now the only SAE series, under plain "sae".
+  const urlMeas = QP.get("meas") === "sae_v2" ? "sae" : QP.get("meas");
   const measAllowed = [...$("meas").options].filter((o) => !o.hidden).map((o) => o.value);
   if (urlMeas && measAllowed.includes(urlMeas)) state.meas = urlMeas;
   $("meas").value = state.meas;
