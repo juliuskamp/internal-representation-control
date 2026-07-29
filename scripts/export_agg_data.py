@@ -20,10 +20,13 @@ Two series families are precomputed, each for two word sets:
                exclusion bias of the think condition)
 
 Also writes agg/layers.json.gz for the layer-curve viewer (docs/layers.html):
-concept-vector measurements collapsed over tokens and sentences, mean ±1 std
-across words per layer (two-stage: token-mean per word x sentence, then
-sentence-mean per word, then across words — words are the replicates).
-SAE/NLA are omitted there (4 layers / 1 layer make no curve).
+concept-vector measurements collapsed over tokens and sentences, per layer.
+Two aggregation orders are stored side by side — "word" (token-mean per
+word x sentence, then sentence-mean per word, then across words, so words are
+the replicates) and "cell" (across all word x sentence cells at once, the
+paper's Figure 26 order). Each carries mean, std and n, so the viewer can draw
+either ±1 std or ±1 SEM. SAE/NLA are omitted there (4 layers / 1 layer make no
+curve).
 
 Also writes agg/words.json.gz for the per-word forest view (docs/forest.html):
 per word x layer, the sentence-mean paired delta vs no_mention (±1 std
@@ -166,18 +169,33 @@ def build_block(records: dict, ws: list[str], cid: str, delta: bool) -> dict | N
 
 
 def layer_curves(per_word: dict) -> dict:
-    """Per measurement variant x word-set mode: mean/std across words of the
-    per-word layer profile (token-mean per sentence, then sentence-mean)."""
+    """Per measurement variant x word-set mode x aggregation order: mean/std of
+    the layer profile, in two nestings of the same token-mean cells.
+
+      "word" — token-mean per word x sentence, then sentence-mean per word,
+               then across words. Words are the replicates (n = words); every
+               word counts once regardless of how many sentences it has.
+      "cell" — token-mean per word x sentence, then straight across all cells
+               (n = word x sentence cells), with no per-word collapse. This is
+               the paper's order (Figure 26 aggregates "across random choices
+               of the target word and output sentence"); note it treats cells
+               sharing a word as independent.
+
+    The two means differ only through the unbalanced design (words have
+    unequal numbers of exact sentences); the stds differ in meaning, so which
+    one the viewer draws is a real choice, not a cosmetic one. Consumers get
+    n alongside so they can show std or std/sqrt(n) (SEM).
+    """
     words = sorted(per_word)
     out: dict = {}
     for var in CV_VARIANTS:
         out[var] = {}
         for mode in ("all", "complete"):
-            vm: dict = {"conds": {}, "deltas": {}}
+            vm: dict = {o: {"conds": {}, "deltas": {}} for o in ("word", "cell")}
             for delta, family, cids in ((False, "conds", CONDS),
                                         (True, "deltas", DELTA_CONDS)):
                 for cid in cids:
-                    vecs = []
+                    vecs, cells = [], []
                     for w in words:
                         arrs = []
                         for rec in per_word[w].values():
@@ -192,11 +210,14 @@ def layer_curves(per_word: dict) -> dict:
                             arrs.append((a - b if delta else a).mean(1))
                         if arrs:
                             vecs.append(np.mean(arrs, axis=0))  # (layers,)
-                    if vecs:
-                        m, s = mean_std(vecs)
-                        vm[family][cid] = {"n": len(vecs),
-                                           "mean": rounded(m, 4),
-                                           "std": rounded(s, 4)}
+                        cells.extend(arrs)
+                    for order, stack in (("word", vecs), ("cell", cells)):
+                        if not stack:
+                            continue
+                        m, s = mean_std(stack)
+                        vm[order][family][cid] = {"n": len(stack),
+                                                  "mean": rounded(m, 4),
+                                                  "std": rounded(s, 4)}
             out[var][mode] = vm
     return out
 

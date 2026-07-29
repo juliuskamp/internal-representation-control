@@ -110,7 +110,16 @@ class Config:
     """aggregate/layers/forest charts: only words where all three conditions
     are exact per sentence (--no-complete for every exact pair)."""
     bands: bool = True
-    """aggregate/layers charts: shaded ±1 std across words (--no-bands)."""
+    """aggregate chart: shaded ±1 std across words (--no-bands). The layers
+    chart uses --band instead."""
+    order: Literal["word", "cell"] = "word"
+    """layers chart replicate: collapse each word's sentences first so words
+    are the replicates, or take every word x sentence cell at once (the
+    paper's Figure 26 order, which treats cells sharing a word as
+    independent)."""
+    band: Literal["std", "sem", "none"] = "std"
+    """layers chart band: ±1 std across replicates, ±1 SEM (std/sqrt(n),
+    uncertainty of the plotted mean), or none."""
     sort: Literal["think", "dont", "alpha"] = "think"
     """forest chart row order: by think Δ, by don't-think Δ, or alphabetical."""
     theme: Literal["light", "dark"] = "light"
@@ -502,12 +511,27 @@ def draw_aggregate(tokens: list[str], conds: list[dict], cfg: Config,
 
 # ---- layers chart (docs/layers.html) ---------------------------------------
 
+# Mirrors ORDER_LABEL / BAND_LABEL in docs/layers.html.
+ORDER_LINE = {"word": "mean over words",
+              "cell": "mean over word × sentence cells"}
+ORDER_UNIT = {"word": "words", "cell": "word × sentence cells"}
+BAND_LABEL = {"std": "±1 std", "sem": "±1 SEM", "none": ""}
+
+
 def layers_series(data: dict, cfg: Config) -> list[dict]:
-    vm = data[cfg.meas]["complete" if cfg.complete else "all"]
+    vm = data[cfg.meas]["complete" if cfg.complete else "all"][cfg.order]
     family = vm["deltas"] if cfg.delta else vm["conds"]
     conds = CONDS_DELTA if cfg.delta else COND
-    return [{"id": cid, "label": label, **family[cid]}
-            for cid, label in conds if cid in family]
+    out = []
+    for cid, label in conds:
+        if cid not in family:
+            continue
+        b = family[cid]
+        # SEM = std/sqrt(n) over whichever replicate --order picks
+        scale = 1 / math.sqrt(b["n"]) if cfg.band == "sem" else 1.0
+        out.append({"id": cid, "label": label, "n": b["n"], "mean": b["mean"],
+                    "err": [s * scale for s in b["std"]]})
+    return out
 
 
 def draw_layers(conds: list[dict], n_layers: int, cfg: Config, pal: dict,
@@ -524,11 +548,12 @@ def draw_layers(conds: list[dict], n_layers: int, cfg: Config, pal: dict,
     fig.patch.set_facecolor("none" if cfg.transparent else pal["surface"])
     ax = fig.add_axes([MARGIN["l"] / tw, bot / h, iw / tw, ih / h])
 
+    show = cfg.band != "none"
     lo = hi = 0.0
     for c in conds:
-        for v, s in zip(c["mean"], c["std"]):
-            lo = min(lo, v - (s if cfg.bands else 0))
-            hi = max(hi, v + (s if cfg.bands else 0))
+        for v, s in zip(c["mean"], c["err"]):
+            lo = min(lo, v - (s if show else 0))
+            hi = max(hi, v + (s if show else 0))
     lo, hi, ticks, tick_labels = nice_scale(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_xlim(0, n_layers - 1)
@@ -543,8 +568,8 @@ def draw_layers(conds: list[dict], n_layers: int, cfg: Config, pal: dict,
 
     x = np.arange(n_layers)
     for c in conds:
-        if cfg.bands:
-            m, s = np.asarray(c["mean"]), np.asarray(c["std"])
+        if show:
+            m, s = np.asarray(c["mean"]), np.asarray(c["err"])
             ax.fill_between(x, m - s, m + s, color=pal[c["id"]], alpha=0.18,
                             linewidth=0)
     for c in conds:
@@ -557,7 +582,8 @@ def draw_layers(conds: list[dict], n_layers: int, cfg: Config, pal: dict,
     legend = [(f"{c['label']}{suffix} — n={c['n']}", pal[c["id"]],
                MARKERS[c["id"]], "-") for c in conds]
     finish(fig, legend, cfg, pal, out, tw, h,
-           "line: mean over words" + (" · shaded: ±1 std" if cfg.bands else ""))
+           f"line: {ORDER_LINE[cfg.order]}"
+           + (f" · shaded: {BAND_LABEL[cfg.band]}" if show else ""))
 
 
 # ---- forest chart (docs/forest.html) ---------------------------------------
@@ -729,13 +755,17 @@ def main_layers(cfg: Config, index: dict) -> None:
     conds = layers_series(load_agg("layers.json.gz"), cfg)
     if not conds:
         raise SystemExit("no plottable series for this selection")
+    tag = ("" if cfg.order == "word" else "_cells") + (
+        "" if cfg.band == "std" else f"_{cfg.band}")
     out = cfg.out or (ARTIFACTS / "figures" /
-                      f"layers_{cfg.meas}{suffixes(cfg)}.png")
+                      f"layers_{cfg.meas}{tag}{suffixes(cfg)}.png")
     draw_layers(conds, index["n_layers"], cfg, THEMES[cfg.theme], out)
     mode = ("complete cases (all three conditions exact per sentence)"
             if cfg.complete else "all words with an exact completion per condition")
-    stat = ("paired per-word Δ vs no mention, mean ±1 std across words"
-            if cfg.delta else "mean ±1 std across concept words")
+    spread = (f"{BAND_LABEL[cfg.band]} across {ORDER_UNIT[cfg.order]}"
+              if cfg.band != "none" else f"over {ORDER_UNIT[cfg.order]}")
+    stat = (f"paired Δ vs no mention, mean {spread}" if cfg.delta
+            else f"mean {spread}")
     print(f"{run_prefix(index)} · token- and sentence-collapsed, {stat}, {mode} · "
           f"concept vectors: {meas_short(cfg.meas)}, layers 0–{index['n_layers'] - 1}")
     print(f"wrote {out}")
@@ -793,12 +823,16 @@ def apply_url(cfg: Config) -> None:
     pick("base", ("band", "none"))
     pick("agg", ("sum", "mean", "max"))
     pick("sort", ("think", "dont", "alpha"))
+    pick("order", ("word", "cell"))
     if "delta" in q:
         cfg.delta = q["delta"] == "1"
     if "exact" in q:
         cfg.complete = q["exact"] != "0"
-    if "bands" in q:
+    if "bands" in q:  # legacy layers param, still written by aggregate.html
         cfg.bands = q["bands"] != "0"
+        if q["bands"] == "0":
+            cfg.band = "none"
+    pick("band", ("std", "sem", "none"))
     if "summary" in q:
         cfg.summary = q["summary"] != "0"
 

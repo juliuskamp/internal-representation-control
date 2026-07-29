@@ -1,6 +1,8 @@
 <!doctype html>
 <!-- Layer-curve viewer: concept-vector representation strength vs layer,
-     collapsed over tokens and sentences, mean ± 1 std across words. Data is
+     collapsed over tokens and sentences. The replicate (words, or word ×
+     sentence cells as in the paper's Figure 26) and the band (±1 std or
+     ±1 SEM) are both selectable. Data is
      fetched from data/index.json and data/agg/layers.json.gz, written by
      scripts/export_agg_data.py. Like the other pages this does NOT work over
      file:// — serve it: python -m http.server -d docs. ?embed=1 hides the
@@ -89,9 +91,13 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
   <header>
     <h1>Representation strength by layer</h1>
     <p>Concept-vector cosine collapsed over the response tokens and all
-    sentences, mean &plusmn; 1 std across concept words, per residual layer
-    (two-stage: token-mean per word&thinsp;&times;&thinsp;sentence, then
-    sentence-mean per word &mdash; words are the replicates). Other views:
+    sentences, per residual layer. Tokens always collapse first; the
+    <b>replicate</b> control then picks what the spread is taken over &mdash;
+    concept words (each word's sentences averaged first) or every
+    word&thinsp;&times;&thinsp;sentence cell at once, the order the paper uses
+    in Figure&nbsp;26. The <b>bands</b> control picks &plusmn;1 std (spread
+    across replicates) or &plusmn;1 SEM (uncertainty of the plotted mean).
+    Other views:
     <a href="index.html">single word</a> &middot;
     <a href="aggregate.html">word-averaged</a> &middot;
     <a href="forest.html">per-word forest</a>.</p>
@@ -112,8 +118,19 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
     <div class="ctl"><label for="complete">Complete cases only</label>
       <input type="checkbox" id="complete" checked
              title="Per sentence, only words where all three conditions are exact"></div>
-    <div class="ctl"><label for="bands">±1 std bands</label>
-      <input type="checkbox" id="bands" checked></div>
+    <div class="ctl"><label for="order">Replicate</label>
+      <select id="order"
+              title="What the spread is taken over: words (collapsing each word's sentences first), or every word × sentence cell at once (the paper's Figure 26 order)">
+        <option value="word">Words (sentences collapsed first)</option>
+        <option value="cell">Word × sentence cells (paper)</option>
+      </select></div>
+    <div class="ctl"><label for="band">Bands</label>
+      <select id="band"
+              title="std = spread across replicates; SEM = std/√n, uncertainty of the plotted mean">
+        <option value="std">±1 std</option>
+        <option value="sem">±1 SEM</option>
+        <option value="none">None</option>
+      </select></div>
   </div>
   <div class="status" id="status" role="status"></div>
 
@@ -205,15 +222,25 @@ function markEl(shape, cx, cy, color, s = 3) {
 }
 
 let INDEX = null, DATA = null;
-const state = { meas: "word_tokens", complete: true, delta: false, bands: true };
+const state = { meas: "word_tokens", complete: true, delta: false,
+                order: "word", band: "std" };
 const QP = new URLSearchParams(location.search);
+
+// What the replicate is, and hence what the band is a claim about.
+const ORDER_LABEL = {
+  word: { unit: "words", line: "mean over words" },
+  cell: { unit: "word × sentence cells", line: "mean over word × sentence cells" },
+};
+const BAND_LABEL = { std: "±1 std", sem: "±1 SEM", none: "" };
 
 function syncURL() {
   const p = new URLSearchParams(location.search);
   p.set("meas", state.meas);
   if (state.delta) p.set("delta", "1"); else p.delete("delta");
   if (!state.complete) p.set("exact", "0"); else p.delete("exact");
-  if (!state.bands) p.set("bands", "0"); else p.delete("bands");
+  if (state.order !== "word") p.set("order", state.order); else p.delete("order");
+  if (state.band !== "std") p.set("band", state.band); else p.delete("band");
+  p.delete("bands");  // superseded by band=; still accepted on the way in
   // Throws SecurityError in a sandboxed iframe (opaque origin) — e.g. the
   // LessWrong widget embed, where there is no address bar to sync anyway.
   try {
@@ -228,18 +255,21 @@ function setStatus(msg, isErr = false) {
 }
 
 function seriesData() {
-  const vm = DATA[state.meas][state.complete ? "complete" : "all"];
+  const vm = DATA[state.meas][state.complete ? "complete" : "all"][state.order];
   const family = state.delta ? vm.deltas : vm.conds;
   const conds = state.delta ? COND.filter((c) => c.id !== "no_mention") : COND;
   return conds.map((c) => {
     const b = family[c.id];
-    return { ...c, vals: b ? b.mean : null, stds: b ? b.std : null,
-             n: b ? b.n : null };
+    // SEM = std/sqrt(n); the stored std is over whichever replicate `order` picks
+    const scale = state.band === "sem" ? 1 / Math.sqrt(b ? b.n : 1) : 1;
+    return { ...c, vals: b ? b.mean : null, n: b ? b.n : null,
+             errs: b ? b.std.map((s) => s * scale) : null };
   });
 }
 
 function render() {
   const conds = seriesData();
+  const showBands = state.band !== "none";
 
   const lg = $("legend"); lg.innerHTML = "";
   for (const c of conds) {
@@ -247,7 +277,7 @@ function render() {
     const it = document.createElement("span"); it.className = "it";
     const color = cssv(c.cssVar);
     const sv = svgEl("svg", { width: 24, height: 12 });
-    if (state.bands) sv.appendChild(svgEl("rect", { x: 0, y: 2, width: 24, height: 8,
+    if (showBands) sv.appendChild(svgEl("rect", { x: 0, y: 2, width: 24, height: 8,
       fill: color, opacity: 0.18 }));
     sv.appendChild(svgEl("line", { x1: 0, x2: 24, y1: 6, y2: 6,
       stroke: color, "stroke-width": 2 }));
@@ -260,25 +290,32 @@ function render() {
   }
   if (lg.childElementCount) {
     const note = document.createElement("span"); note.className = "it";
-    note.textContent = "line: mean over words" + (state.bands ? " · shaded: ±1 std" : "");
+    note.textContent = `line: ${ORDER_LABEL[state.order].line}`
+      + (showBands ? ` · shaded: ${BAND_LABEL[state.band]}` : "");
     lg.appendChild(note);
   }
 
   drawChart(conds);
   syncURL();
+  const spread = showBands
+    ? `${BAND_LABEL[state.band]} across ${ORDER_LABEL[state.order].unit}`
+    : `over ${ORDER_LABEL[state.order].unit}`;
   $("meta").textContent =
     `Run ${INDEX.run_id} · google/gemma-3-27b-it (bf16, greedy) · ` +
     `token- and sentence-collapsed, ` +
-    (state.delta ? "paired per-word Δ vs no mention, mean ±1 std across words" :
-      "mean ±1 std across concept words") +
+    (state.delta ? `paired Δ vs no mention, mean ${spread}`
+      : `mean ${spread}`) +
     `, ${state.complete ? "complete cases (all three conditions exact per sentence)"
       : "all words with an exact completion per condition"} · ` +
     `concept vectors: ${state.meas === "paper" ? "paper method" : "word-token method"}, ` +
-    `layers 0–${INDEX.n_layers - 1}`;
+    `layers 0–${INDEX.n_layers - 1}` +
+    (state.order === "cell"
+      ? " · cell order treats sentences sharing a word as independent" : "");
 }
 
 function drawChart(conds) {
   const svg = $("chart");
+  const showBands = state.band !== "none";
   const W = 1020, H = 400, m = { t: 16, r: 28, b: 48, l: 58 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const L = INDEX.n_layers;
@@ -289,7 +326,7 @@ function drawChart(conds) {
   for (const c of conds) {
     (c.vals || []).forEach((v, i) => {
       consider(v);
-      if (v != null && state.bands) { consider(v - c.stds[i]); consider(v + c.stds[i]); }
+      if (v != null && showBands) { consider(v - c.errs[i]); consider(v + c.errs[i]); }
     });
   }
   const ns = niceScale(lo, hi);
@@ -324,13 +361,13 @@ function drawChart(conds) {
   xl.textContent = "layer";
   svg.appendChild(xl);
 
-  // ±1 std areas behind the lines
-  for (const c of state.bands ? conds : []) {
+  // ±1 std / ±1 SEM areas behind the lines
+  for (const c of showBands ? conds : []) {
     if (!c.vals) continue;
     const color = cssv(c.cssVar);
     let d = "";
-    c.vals.forEach((v, i) => { d += `${i ? "L" : "M"}${x(i)},${y(v + c.stds[i])}`; });
-    for (let i = L - 1; i >= 0; i--) d += `L${x(i)},${y(c.vals[i] - c.stds[i])}`;
+    c.vals.forEach((v, i) => { d += `${i ? "L" : "M"}${x(i)},${y(v + c.errs[i])}`; });
+    for (let i = L - 1; i >= 0; i--) d += `L${x(i)},${y(c.vals[i] - c.errs[i])}`;
     svg.appendChild(svgEl("path", { d: d + "Z", fill: color, opacity: 0.18 }));
   }
 
@@ -363,12 +400,15 @@ function drawChart(conds) {
     hit.addEventListener("mousemove", (ev) => {
       guide.setAttribute("x1", x(i)); guide.setAttribute("x2", x(i));
       guide.setAttribute("visibility", "visible");
-      let html = `<div class="tt">layer ${i}</div>`;
+      let html = `<div class="tt">layer ${i}`
+        + (showBands ? ` · ± ${BAND_LABEL[state.band].replace("±1 ", "")}` : "")
+        + `</div>`;
       for (const c of conds) {
         if (!c.vals) continue;
         const color = cssv(c.cssVar);
         html += `<div class="row"><span style="color:${color}">${c.label}</span>`
-          + `<b>${c.vals[i].toFixed(4)} ± ${c.stds[i].toFixed(4)}</b></div>`;
+          + `<b>${c.vals[i].toFixed(4)}`
+          + (showBands ? ` ± ${c.errs[i].toFixed(4)}` : "") + `</b></div>`;
       }
       tip.innerHTML = html;
       tip.style.display = "block";
@@ -390,12 +430,18 @@ function init() {
   $("meas").value = state.meas;
   if (QP.get("delta") === "1") { state.delta = true; $("delta").value = "delta"; }
   if (QP.get("exact") === "0") { state.complete = false; $("complete").checked = false; }
-  if (QP.get("bands") === "0") { state.bands = false; $("bands").checked = false; }
+  if (QP.get("order") === "cell") state.order = "cell";
+  if (QP.get("bands") === "0") state.band = "none";  // legacy param
+  const urlBand = QP.get("band");
+  if (urlBand && ["std", "sem", "none"].includes(urlBand)) state.band = urlBand;
+  $("order").value = state.order;
+  $("band").value = state.band;
 
   $("meas").addEventListener("change", (e) => { state.meas = e.target.value; render(); });
   $("delta").addEventListener("change", (e) => { state.delta = e.target.value === "delta"; render(); });
   $("complete").addEventListener("change", (e) => { state.complete = e.target.checked; render(); });
-  $("bands").addEventListener("change", (e) => { state.bands = e.target.checked; render(); });
+  $("order").addEventListener("change", (e) => { state.order = e.target.value; render(); });
+  $("band").addEventListener("change", (e) => { state.band = e.target.value; render(); });
   new MutationObserver(render).observe(document.documentElement,
     { attributes: true, attributeFilter: ["data-theme"] });
 
