@@ -148,6 +148,8 @@ figure { margin: 0; }
 .chartbox { position: relative; }
 svg text { fill: var(--ink-2); font-family: system-ui, sans-serif; }
 svg .tok { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; fill: var(--ink); }
+svg .empty { font-size: 13px; fill: var(--ink-2); }
+svg .empty.hint { font-size: 11.5px; opacity: .85; }
 svg .grid { stroke: var(--line); stroke-width: 1; }
 svg .zero { stroke: var(--ink-2); stroke-width: 1; }
 .tooltip {
@@ -697,6 +699,27 @@ function render() {
   ]);
 }
 
+// Nothing to plot: say why on the empty axes instead of leaving a blank frame.
+// NLA is the usual case, since the explanations and the judge scores come from
+// two separate optional scripts and are exported per word/sentence.
+function emptyMessage(slot, conds) {
+  if (conds.some((c) => c.vals)) return null;
+  if (isNLA()) {
+    const anyExplanation = COND.some((c) => {
+      const rec = slot.conditions[c.id];
+      return rec && rec.exact && rec.nla && rec.nla.explanations.some((e) => e);
+    });
+    return anyExplanation
+      ? ["No judge scores for this word and sentence yet.",
+         "The explanations are listed below — run scripts/nla_judge.py, then re-export."]
+      : ["No NLA explanations exported for this word and sentence.",
+         "Run scripts/nla_explain.py --agg token, judge them, then re-export."];
+  }
+  if (conds.every((c) => c.excluded || c.missing))
+    return ["Every condition was excluded here — none reproduced the sentence exactly."];
+  return ["No data for this selection."];
+}
+
 function drawChart(tokens, conds) {
   const svg = $("chart");
   const H = 430, m = { t: 16, r: 28, b: 86, l: 58 };
@@ -778,6 +801,17 @@ function drawChart(tokens, conds) {
     ? `selected-latent activation (${state.saeAgg === "mean" ? "average" : state.saeAgg})`
     : "cosine with concept vector";
   svg.appendChild(yl);
+
+  // empty state: centred message on the otherwise blank plot area
+  const empty = emptyMessage(currentSlot(), conds);
+  if (empty) {
+    empty.forEach((line, i) => {
+      const t = el("text", { x: m.l + iw / 2, y: m.t + ih / 2 + i * 20,
+        "text-anchor": "middle", class: i ? "empty hint" : "empty" });
+      t.textContent = line;
+      svg.appendChild(t);
+    });
+  }
 
   // per-condition null bands (mean ± std across control words); drawn behind
   // the lines, translucent so overlapping bands blend.
