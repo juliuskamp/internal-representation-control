@@ -249,6 +249,31 @@ footer { margin-top: 26px; color: var(--ink-2); font-size: 12.5px; max-width: 75
 <script>
 if (new URLSearchParams(location.search).has("embed")) {
   document.documentElement.classList.add("embed");
+  reportHeightToParent();
+}
+
+// An embedding host can't measure us across origins, so report our own content
+// height and let it size the iframe. Two message shapes: our own, and the one
+// LessWrong's iframe-widget wrapper listens for. Height only, so "*" is fine.
+function reportHeightToParent() {
+  if (window.parent === window) return;
+  const el = document.querySelector(".wrap") || document.documentElement;
+  let last = 0, raf = 0;
+  const post = () => {
+    const cs = getComputedStyle(document.body);
+    const h = Math.ceil(el.getBoundingClientRect().bottom +
+      (parseFloat(cs.marginBottom) || 0));
+    if (Math.abs(h - last) < 1) return;  // sub-pixel churn would loop
+    last = h;
+    parent.postMessage({ "irc-height": h }, "*");
+    parent.postMessage({ type: "iframe-widget-resize", height: h }, "*");
+  };
+  const schedule = () => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(post);
+  };
+  new ResizeObserver(schedule).observe(el);
+  addEventListener("load", schedule);
 }
 
 const COND = [
@@ -341,7 +366,11 @@ function syncURL() {
   if (isSAE()) p.set("agg", state.saeAgg); else p.delete("agg");
   if (!state.summary) p.set("summary", "0"); else p.delete("summary");
   if (!$("tablewrap").hidden) p.set("table", "1"); else p.delete("table");
-  history.replaceState(null, "", `${location.pathname}?${p.toString()}${location.hash}`);
+  // Throws SecurityError in a sandboxed iframe (opaque origin) — e.g. the
+  // LessWrong widget embed, where there is no address bar to sync anyway.
+  try {
+    history.replaceState(null, "", `${location.pathname}?${p.toString()}${location.hash}`);
+  } catch (e) { /* no URL state available; harmless */ }
 }
 
 function setStatus(msg, isErr = false) {
