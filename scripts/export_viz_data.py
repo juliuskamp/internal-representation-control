@@ -7,11 +7,9 @@ For every stored (word, sentence, condition) run of a pipeline run:
     token, computed per condition. The no_mention band is word-independent
     (shared activations x control vectors), so it is stored once per sentence
     in shared-bands.json.gz instead of being duplicated into every word chunk.
-  - SAE activation per layer x selected latent x token (aggregation and latent
-    toggling happen client-side in the viewer), once per available latent-
-    selection version: v1 under the original "sae"/"sae_latents" keys, v2
-    (contrastive selection, see notes/latents_v2.md) under "sae_v2"/
-    "sae_latents_v2"
+  - SAE activation per layer x selected latent x token under "sae"/
+    "sae_latents" (aggregation and latent toggling happen client-side in the
+    viewer), for the latents selected in artifacts/latents_v2/
   - NLA explanations per token (layer 41), when results/nla_explanations_
     token_L41.jsonl exists in the run dir (written by scripts/nla_explain.py
     --agg token): the explanation text plus the LLM-judge score (0-100 logit
@@ -43,7 +41,7 @@ from pathlib import Path
 import torch
 import tyro
 
-from irc.constants import N_LAYERS, NLA_LAYER, SAE_LAYERS
+from irc.constants import LATENTS_VERSION, N_LAYERS, NLA_LAYER, SAE_LAYERS
 from irc.constants import VECTOR_VARIANTS as VARIANTS
 from irc.model import sentence_display_tokens
 from irc.paths import ARTIFACTS, DOCS_DATA, RUNS
@@ -125,14 +123,7 @@ def main(cfg: Config) -> None:
     banks = {v: load_vector_bank(v) for v in VARIANTS}
 
     saes = load_saes(SAE_LAYERS)
-    # (version, slot data key, slot meta key); v1 keeps the original unsuffixed
-    # keys so previously published data and links keep working.
-    sae_versions = [
-        (ver, "sae" + suffix, "sae_latents" + suffix)
-        for ver, suffix in (("v1", ""), ("v2", "_v2"))
-        if (ARTIFACTS / f"latents_{ver}").is_dir()
-    ]
-    sel_cache: dict[tuple[str, str], dict | None] = {}
+    sel_cache: dict[str, dict | None] = {}
 
     nla = load_nla(run_dir)
     judgments = load_judgments(run_dir)
@@ -145,13 +136,13 @@ def main(cfg: Config) -> None:
         judge_meta = {"model": any_row["judge_model"],
                       "prompt_version": any_row["prompt_version"]}
 
-    def sel_for(word: str, version: str) -> dict | None:
-        if (word, version) not in sel_cache:
-            p = ARTIFACTS / f"latents_{version}" / f"{word}.json"
-            sel_cache[word, version] = (
+    def sel_for(word: str) -> dict | None:
+        if word not in sel_cache:
+            p = ARTIFACTS / f"latents_{LATENTS_VERSION}" / f"{word}.json"
+            sel_cache[word] = (
                 json.loads(p.read_text())["layers"] if p.exists() else None
             )
-        return sel_cache[word, version]
+        return sel_cache[word]
 
     tokens_cache: dict[str, list[str]] = {}
     data: dict = {}   # word -> si -> slot
@@ -199,10 +190,8 @@ def main(cfg: Config) -> None:
                     e = {"target": rnd(cos_v[v][:, banks[v]["w_idx"][word]].cpu())}
                     e.update(band_v.get(v, {}))
                     entry[v] = e
-                for ver, data_key, meta_key in sae_versions:
-                    sel = sel_for(word, ver)
-                    if sel is None:
-                        continue
+                sel = sel_for(word)
+                if sel is not None:
                     sae_vals, sae_meta = [], []
                     for l in SAE_LAYERS:
                         es = sel.get(str(l), [])
@@ -215,8 +204,8 @@ def main(cfg: Config) -> None:
                             sae_vals.append([[round(x, 2) for x in col] for col in f_sel.t().tolist()])
                         else:
                             sae_vals.append(None)
-                    entry[data_key] = sae_vals
-                    slot.setdefault(meta_key, sae_meta)
+                    entry["sae"] = sae_vals
+                    slot.setdefault("sae_latents", sae_meta)
             slot["conditions"][rec["condition"]] = entry
         if (i + 1) % 40 == 0:
             print(f"{i + 1}/{len(records)}")
@@ -252,7 +241,6 @@ def main(cfg: Config) -> None:
     (DATA_DIR / "index.json").write_text(json.dumps({
         "run_id": cfg.run_id,
         "sae_layers": list(SAE_LAYERS),
-        "sae_versions": [v[0] for v in sae_versions],
         "n_layers": N_LAYERS,
         "variants": list(VARIANTS),
         "nla_layer": NLA_LAYER,

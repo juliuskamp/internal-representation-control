@@ -15,7 +15,7 @@ Usage:
   uv run python scripts/render_viewer_figure.py                    # list words
   uv run python scripts/render_viewer_figure.py --word Dust --sent 3
   uv run python scripts/render_viewer_figure.py --word Dust --sent 3 \
-      --meas sae_v2 --layer 40 --agg sum --theme dark --out dust.svg
+      --meas sae --layer 40 --agg sum --theme dark --out dust.svg
   uv run python scripts/render_viewer_figure.py --chart aggregate --sent 3 --delta
   uv run python scripts/render_viewer_figure.py --chart layers --delta --theme dark
   uv run python scripts/render_viewer_figure.py --chart forest --layer 40
@@ -91,18 +91,18 @@ class Config:
     sent: int = 0
     """word/aggregate charts: sentence index (0-based, the sNN number in the
     viewer dropdown)."""
-    meas: Literal["word_tokens", "paper", "sae", "sae_v2", "nla"] = "word_tokens"
+    meas: Literal["word_tokens", "paper", "sae", "nla"] = "word_tokens"
     """Measurement: concept-vector variant, SAE latent selection, or NLA.
     layers/forest charts only have the concept-vector variants."""
     layer: int = 40
     """Residual layer (word/aggregate/forest charts); snapped to the nearest
-    SAE layer for sae/sae_v2 and fixed to the NLA layer for nla."""
+    SAE layer for sae and fixed to the NLA layer for nla."""
     base: Literal["band", "none"] = "band"
     """word chart baseline: control-word ±1 std bands per condition, or none.
     band is only available for concept-vector measurements (falls back to
     none otherwise)."""
     agg: Literal["sum", "mean", "max"] = "sum"
-    """Aggregation over the selected SAE latents (sae/sae_v2 only)."""
+    """Aggregation over the selected SAE latents (sae only)."""
     delta: bool = False
     """aggregate/layers charts: paired per-word Δ vs the no-mention condition
     instead of raw levels (the forest chart is always the paired Δ)."""
@@ -189,7 +189,7 @@ def aggregate_sae(rows: list[list[float]], agg: str) -> list[float]:
 def series_data(slot: dict, cfg: Config, layer: int, sae_layers: list[int]) -> list[dict]:
     """Port of the viewer's seriesData(): one entry per condition with vals
     (list[float | None] | None), band (lo, hi) | None, excluded, completion."""
-    show_bands = cfg.base == "band" and cfg.meas not in ("sae", "sae_v2", "nla")
+    show_bands = cfg.base == "band" and cfg.meas not in ("sae", "nla")
     out = []
     for cid, label in COND:
         rec = slot["conditions"].get(cid)
@@ -204,7 +204,7 @@ def series_data(slot: dict, cfg: Config, layer: int, sae_layers: list[int]) -> l
                 nla = rec.get("nla")
                 if nla and any(s is not None for s in nla["score"]):
                     c["vals"] = nla["score"]
-            elif cfg.meas in ("sae", "sae_v2"):
+            elif cfg.meas == "sae":
                 li = sae_layers.index(layer)
                 rows = (rec.get(cfg.meas) or [None] * len(sae_layers))[li]
                 if rows:
@@ -223,7 +223,7 @@ def series_data(slot: dict, cfg: Config, layer: int, sae_layers: list[int]) -> l
 def y_label(cfg: Config) -> str:
     if cfg.meas == "nla":
         return "judge score — concept in NLA explanation (0–100)"
-    if cfg.meas in ("sae", "sae_v2"):
+    if cfg.meas == "sae":
         agg = "average" if cfg.agg == "mean" else cfg.agg
         return f"selected-latent activation ({agg})"
     return "cosine with concept vector"
@@ -410,7 +410,7 @@ def agg_series(chunk: dict, cfg: Config, layer: int, sae_layers: list[int]) -> l
                 if b:
                     c.update(vals=b["mean"], stds=b["std"], n=max(b["n"]),
                              sm=b.get("summary"))
-            elif cfg.meas in ("sae", "sae_v2"):
+            elif cfg.meas == "sae":
                 li = sae_layers.index(layer)
                 vb = block.get(cfg.meas)
                 if vb and vb[cfg.agg]["mean"][li]:
@@ -671,12 +671,10 @@ def meta_line(index: dict, cfg: Config, word: str, sentence: str, layer: int) ->
         judge = f"{j['model']} (prompt {j['prompt_version']})" if j else "LLM"
         detail = (f"NLA: kitft/nla-gemma3-27b-L41-av (greedy) on layer {layer} resid_post — "
                   f"{judge} judge, 0–100 logit-expectation score for “{word.lower()}”")
-    elif cfg.meas in ("sae", "sae_v2"):
+    elif cfg.meas == "sae":
         agg = "average" if cfg.agg == "mean" else cfg.agg
-        sel = ("selection v2: contrastive vs 99 baseline words, excluded on 100 "
-               "control-word prompts" if cfg.meas == "sae_v2"
-               else "selection v1: raw concept-token activation, excluded on the "
-                    "50 experiment sentences")
+        sel = ("selection: contrastive vs 99 baseline words, excluded on 100 "
+               "control-word prompts")
         detail = (f"SAE: Gemma Scope 2 residual 16k l0_medium, layer {layer}, "
                   f"{agg} over selected latents · {sel}")
     else:
@@ -716,11 +714,9 @@ def suffixes(cfg: Config, delta_applies: bool = True) -> str:
 
 
 def main_aggregate(cfg: Config, index: dict) -> None:
-    if cfg.meas == "sae_v2" and "v2" not in index.get("sae_versions", ["v1"]):
-        raise SystemExit("this export has no sae_v2 series — re-run export_viz_data.py")
     if cfg.meas == "nla":
         layer = index["nla_layer"]
-    elif cfg.meas in ("sae", "sae_v2"):
+    elif cfg.meas == "sae":
         layer = min(index["sae_layers"], key=lambda l: abs(l - cfg.layer))
     else:
         layer = max(0, min(index["n_layers"] - 1, cfg.layer))
@@ -737,11 +733,10 @@ def main_aggregate(cfg: Config, index: dict) -> None:
             if cfg.delta else "mean ±1 std across concept words")
     if cfg.meas == "nla":
         detail = f"NLA judge score (0–100) on layer {layer} resid_post"
-    elif cfg.meas in ("sae", "sae_v2"):
+    elif cfg.meas == "sae":
         agg = "average" if cfg.agg == "mean" else cfg.agg
         detail = (f"SAE: Gemma Scope 2 residual 16k l0_medium, layer {layer}, "
-                  f"{agg} over selected latents "
-                  f"(selection {'v2, contrastive' if cfg.meas == 'sae_v2' else 'v1'})")
+                  f"{agg} over selected latents (contrastive selection)")
     else:
         detail = (f"concept vectors: {meas_short(cfg.meas)}, "
                   f"layer {layer} of {index['n_layers'] - 1}")
@@ -819,7 +814,9 @@ def apply_url(cfg: Config) -> None:
                 setattr(cfg, name, int(q[name]))
             except ValueError:
                 raise SystemExit(f"{name}={q[name]!r} is not an integer")
-    pick("meas", ("word_tokens", "paper", "sae", "sae_v2", "nla"))
+    if q.get("meas") == "sae_v2":
+        q["meas"] = "sae"  # legacy key from when two latent selections existed
+    pick("meas", ("word_tokens", "paper", "sae", "nla"))
     pick("base", ("band", "none"))
     pick("agg", ("sum", "mean", "max"))
     pick("sort", ("think", "dont", "alpha"))
@@ -856,14 +853,12 @@ def main(cfg: Config) -> None:
     word = by_lower.get(cfg.word.lower())
     if word is None:
         raise SystemExit(f"unknown word {cfg.word!r} — run without --word to list")
-    if cfg.meas == "sae_v2" and "v2" not in index.get("sae_versions", ["v1"]):
-        raise SystemExit("this export has no sae_v2 series — re-run export_viz_data.py")
-    if cfg.meas in ("sae", "sae_v2", "nla") and cfg.base == "band":
+    if cfg.meas in ("sae", "nla") and cfg.base == "band":
         cfg.base = "none"  # like the viewer: bands only exist for concept vectors
 
     if cfg.meas == "nla":
         layer = index["nla_layer"]
-    elif cfg.meas in ("sae", "sae_v2"):
+    elif cfg.meas == "sae":
         layer = min(index["sae_layers"], key=lambda l: abs(l - cfg.layer))
     else:
         layer = max(0, min(index["n_layers"] - 1, cfg.layer))
@@ -883,9 +878,8 @@ def main(cfg: Config) -> None:
     draw(slot["tokens"], conds, cfg, THEMES[cfg.theme], out)
 
     print(meta_line(index, cfg, word, slot["sentence"], layer))
-    if cfg.meas in ("sae", "sae_v2"):
-        meta_key = "sae_latents_v2" if cfg.meas == "sae_v2" else "sae_latents"
-        for m in slot.get(meta_key, []):
+    if cfg.meas == "sae":
+        for m in slot.get("sae_latents", []):
             if m["layer"] == layer:
                 for e in m["latents"]:
                     print(f"  #{e['latent']}  {e['label'] or '(no label)'}")

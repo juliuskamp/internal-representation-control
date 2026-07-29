@@ -18,6 +18,13 @@ SAE_LAYERS: tuple[int, ...] = (16, 31, 40, 53)
 # (see irc/concept_vectors.py; "word_tokens" is the working method).
 VECTOR_VARIANTS: tuple[str, ...] = ("paper", "word_tokens")
 
+# SAE latent-selection version used for the published measurements and viewer:
+# "v2" ranks latents contrastively (concept prompts minus control-word prompts)
+# rather than by raw activation with a baseline exclusion, which keeps out
+# latents that fire on any concrete noun. "v1" is still selectable in the
+# pipeline (irc/pipeline.py) but is not exported to docs/data/.
+LATENTS_VERSION = "v2"
+
 # Decoder depth of gemma-3-27b-it: layer count of all-layer residual captures.
 N_LAYERS = 62
 

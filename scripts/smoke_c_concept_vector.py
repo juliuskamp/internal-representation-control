@@ -1,6 +1,6 @@
 """Smoke test C: compute a "football" concept vector and sanity-check it.
 
-Method (chosen empirically; see notes/smoke_tests.md): "word_tokens" extraction —
+Method (chosen empirically): "word_tokens" extraction —
 mean residual activation at the concept word's own tokens across sentence
 templates, minus the same for random words. The two alternatives from the paper
 sketch (last-prompt-token, response-mean) were tested and FAILED sanity checks:

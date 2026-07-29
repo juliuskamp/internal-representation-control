@@ -5,7 +5,7 @@ about random words). Two extraction variants (see build_vector_bank):
   - "paper": activation at the last prompt token of "Tell me about {word}."
     (paper appendix 12.1.1; failed sanity checks on Gemma — kept for comparison).
   - "word_tokens": mean activation at the word's own token positions across
-    sentence templates (the working method; see notes/smoke_tests.md).
+    sentence templates (the working method).
 """
 
 from irc import env  # noqa: F401

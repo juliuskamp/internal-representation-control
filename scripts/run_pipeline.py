@@ -33,10 +33,12 @@ class Config:
     sae_layers: tuple[int, ...] = constants.SAE_LAYERS
     topk_latents: int = 5
     neuronpedia: bool = True
-    # Latent-selection version: "v1" (raw concept_mean, exclusion on the 50
-    # experiment sentences) or "v2" (contrastive score vs the 99 baseline
-    # words, exclusion on the 100 control words' template prompts).
-    latents_version: str = "v1"
+    # Latent-selection version: "v2" (contrastive score vs the 99 baseline
+    # words, exclusion on the 100 control words' template prompts) is the
+    # published one — the only version scripts/export_viz_data.py exports.
+    # "v1" (raw concept_mean, exclusion on the 50 experiment sentences) is
+    # kept selectable for comparison.
+    latents_version: str = constants.LATENTS_VERSION
 
 
 def main(cfg: Config) -> None:

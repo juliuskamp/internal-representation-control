@@ -49,7 +49,7 @@ from irc.paths import DOCS_DATA
 CONDS = ["think", "dont_think", "no_mention"]
 DELTA_CONDS = ["think", "dont_think"]
 CV_VARIANTS = ["word_tokens", "paper"]
-SAE_VERSIONS = ["sae", "sae_v2"]
+SAE_KEYS = ["sae"]
 SAE_AGGS = ["sum", "mean", "max"]
 SAE_FN = {"sum": np.sum, "mean": np.mean, "max": np.max}
 
@@ -72,9 +72,9 @@ def cond_words(records: dict, words: list[str], cid: str, mode: str,
     return [w for w in words if all(records[w]["exact"].get(c) for c in need)]
 
 
-def sae_series(entry: dict, ver: str, li: int, agg: str) -> np.ndarray | None:
+def sae_series(entry: dict, key: str, li: int, agg: str) -> np.ndarray | None:
     """Latent-aggregated (T,) series for one word/condition/layer, or None."""
-    x = entry.get(ver)
+    x = entry.get(key)
     if not x or x[li] is None:
         return None
     return SAE_FN[agg](x[li], axis=0)
@@ -102,11 +102,11 @@ def build_block(records: dict, ws: list[str], cid: str, delta: bool) -> dict | N
                           "std": rounded(s, 4),
                           "summary": {"mean": rounded(tm, 4),
                                       "std": rounded(ts, 4)}}
-    for ver in SAE_VERSIONS:
-        if not any(ver in records[w][cid] for w in ws):
+    for key in SAE_KEYS:
+        if not any(key in records[w][cid] for w in ws):
             continue
-        n_l = len(next(records[w][cid][ver] for w in ws
-                       if ver in records[w][cid]))
+        n_l = len(next(records[w][cid][key] for w in ws
+                       if key in records[w][cid]))
         vb: dict = {"n": [], **{agg: {"mean": [], "std": [],
                                       "summary": {"mean": [], "std": []}}
                                 for agg in SAE_AGGS}}
@@ -114,11 +114,11 @@ def build_block(records: dict, ws: list[str], cid: str, delta: bool) -> dict | N
             per_agg: dict[str, list[np.ndarray]] = {agg: [] for agg in SAE_AGGS}
             for w in ws:
                 for agg in SAE_AGGS:
-                    a = sae_series(records[w][cid], ver, li, agg)
+                    a = sae_series(records[w][cid], key, li, agg)
                     if a is None:
                         break
                     if delta:
-                        b = sae_series(records[w]["no_mention"], ver, li, agg)
+                        b = sae_series(records[w]["no_mention"], key, li, agg)
                         if b is None:
                             break
                         a = a - b
@@ -137,7 +137,7 @@ def build_block(records: dict, ws: list[str], cid: str, delta: bool) -> dict | N
                 tm, ts = mean_std([a.mean() for a in per_agg[agg]])
                 vb[agg]["summary"]["mean"].append(round(float(tm), 3))
                 vb[agg]["summary"]["std"].append(round(float(ts), 3))
-        block[ver] = vb
+        block[key] = vb
     nla = []
     for w in ws:
         a = records[w][cid].get("nla")
@@ -275,10 +275,10 @@ def collect(chunk: dict) -> dict[str, dict]:
                 for var in CV_VARIANTS:
                     if c.get(var):
                         entry[var] = np.asarray(c[var]["target"], dtype=np.float32)
-                for ver in SAE_VERSIONS:
-                    if c.get(ver):
-                        entry[ver] = [np.asarray(l, dtype=np.float32)
-                                      if l else None for l in c[ver]]
+                for key in SAE_KEYS:
+                    if c.get(key):
+                        entry[key] = [np.asarray(l, dtype=np.float32)
+                                      if l else None for l in c[key]]
                 nla = c.get("nla")
                 if nla and any(s is not None for s in nla["score"]):
                     entry["nla"] = np.asarray(
