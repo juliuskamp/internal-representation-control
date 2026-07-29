@@ -37,7 +37,7 @@ body {
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
-.embed .wrap { padding: 12px 12px 24px; display: flex; flex-direction: column; }
+.embed .wrap { padding: 12px 12px 10px; display: flex; flex-direction: column; }
 .embed header { display: none; }
 /* Embed layout: figure first, controls below it; hide the table toggle and
    the run/model meta footer. */
@@ -49,6 +49,13 @@ body {
 .embed .latents { order: 6; }
 .embed .nlabox { order: 7; }
 .embed .tablebox, .embed footer { display: none; }
+/* The controls are the last *visible* block in the embed, so anything that
+   reserves space after them (the controls' own margin, the empty status /
+   chips rows, the wrap's bottom padding) is dead space the host iframe shows:
+   the reported height includes it. Collapse it when empty. */
+.embed .controls { margin-bottom: 0; }
+.embed .status:empty { min-height: 0; margin: 0; }
+.embed .chips:empty { display: none; }
 header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
   font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance;

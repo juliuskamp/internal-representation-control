@@ -35,7 +35,19 @@ body {
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .wrap { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
-.embed .wrap { padding: 12px 12px 24px; }
+/* Embed layout: figure first, controls below it. The trailing padding is part
+   of the height we report to the embedding host, so keep it small — it would
+   otherwise show up there as dead space under the controls. */
+.embed .wrap { padding: 12px 12px 10px; display: flex; flex-direction: column; }
+.embed .legend { order: 1; }
+.embed figure { order: 2; }
+.embed .controls { order: 3; }
+.embed .status { order: 4; }
+.embed .status:empty { min-height: 0; margin: 0; }
+/* hide the run/model meta footer, as index.html does; with nothing after the
+   controls, their bottom margin would just be trailing space */
+.embed footer { display: none; }
+.embed .controls { margin-bottom: 0; }
 .embed header { display: none; }
 header h1 {
   font-family: Charter, Georgia, "Times New Roman", serif;
